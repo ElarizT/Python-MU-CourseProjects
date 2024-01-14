@@ -7,13 +7,13 @@ url = 'https://en.wikipedia.org/wiki/Turritopsis_dohrnii'
 # Send an HTTP request to the URL
 response = requests.get(url)
 
-# Check if the request was successful (status code 200)
+# Check if the request was successful
 if response.status_code == 200:
     # Parse the HTML content of the page using BeautifulSoup
     soup = BeautifulSoup(response.text, 'html.parser')
 
-    # Extract information by finding HTML elements using tags, classes, or other attributes
-    # Example: Extracting all the text from paragraphs
+    # Extract information by finding HTML elements using tags, classes and other attributes
+    # Extracting all the text from paragraphs
     paragraphs = soup.find_all('p')
     website_text = '\n'.join(paragraph.text for paragraph in paragraphs)
     print(website_text)
@@ -35,7 +35,7 @@ def generate_answers_chatbot(user_question):
     else:
         return "I don't have an answer for that question."
 
-# Call the function with the user's question
+# Call the function with the user question
 answer = generate_answers_chatbot(question)
 print("Chatbot's Answer:")
 print(answer)

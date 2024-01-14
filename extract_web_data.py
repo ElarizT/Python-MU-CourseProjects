@@ -9,7 +9,7 @@ response = requests.get(url)
 
 # Check if the request was successful
 if response.status_code == 200:
-    # Parse the HTML content of the page using BeautifulSoup
+    # Parse the HTML content of the page
     soup = BeautifulSoup(response.text, 'html.parser')
 
     # Extract information by finding HTML elements using tags, classes and other attributes

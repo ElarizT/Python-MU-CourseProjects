@@ -1,42 +1,26 @@
-import requests
-from bs4 import BeautifulSoup
+import streamlit as st
+from transformers import pipeline
 
-# Specify the URL of the website you want to scrape
-url = 'https://en.wikipedia.org/wiki/Turritopsis_dohrnii'
+qa_model = pipeline("question-answering", model="deepset/xlm-roberta-large-squad2")
 
-# Send an HTTP request to the URL
-response = requests.get(url)
+# Streamlit app
+st.title("Multilingual Question Answering App")
 
-# Check if the request was successful (status code 200)
-if response.status_code == 200:
-    # Parse the HTML content of the page using BeautifulSoup
-    soup = BeautifulSoup(response.text, 'html.parser')
+# Upload text file
+uploaded_file = st.file_uploader("Upload a text file", type=["txt"])
+if uploaded_file is not None:
+    # Read the file
+    text = uploaded_file.read().decode("utf-8")
+    st.write("Text content:")
+    st.write(text)
 
-    # Extract information by finding HTML elements using tags, classes, or other attributes
-    # Example: Extracting all the text from paragraphs
-    paragraphs = soup.find_all('p')
-    website_text = '\n'.join(paragraph.text for paragraph in paragraphs)
-    print(website_text)
-else:
-    print('Failed to retrieve the webpage. Status code:', response.status_code)
+    # Input question
+    question = st.text_input("Ask a question based on the text:")
 
-# Capture user input
-question = input('Enter your question: ')
-
-# Define a function to generate answers
-def generate_answers_chatbot(user_question):
-    if 'jellyfish' in user_question.lower():
-        answer1 = website_text.lower().find(question[0])
-        if answer1 != -1:
-            sub = website_text[answer1:]
-            return sub
+    # Generate answer when the user submits a question
+    if st.button("Get Answer"):
+        if question and text:
+            result = qa_model(question=question, context=text)
+            st.write(f"Answer: {result['answer']}")
         else:
-            return "The term was not found in the scraped text."
-    else:
-        return "I don't have an answer for that question."
-
-# Call the function with the user's question
-answer = generate_answers_chatbot(question)
-print("Chatbot's Answer:")
-print(answer)
-
+            st.write("Please upload a file and enter a question.")

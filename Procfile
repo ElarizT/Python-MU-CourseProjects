@@ -1,0 +1,1 @@
+web: python fix_template.py && gunicorn app:app

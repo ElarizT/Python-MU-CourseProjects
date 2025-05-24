@@ -1,0 +1,33 @@
+{% extends "layout.html" %}
+{% block title %}Authentication Error{% endblock %}
+{% block content %}
+<div class="row justify-content-center mt-5">
+    <div class="col-md-8">
+        <div class="card">
+            <div class="card-header bg-danger text-white">
+                <h3><i class="fas fa-exclamation-triangle me-2"></i>Authentication Error</h3>
+            </div>
+            <div class="card-body">
+                <h4>{{ error_type }}</h4>
+                <p class="lead">{{ error_message }}</p>
+                
+                <div class="alert alert-info mt-4">
+                    <h5><i class="fas fa-info-circle me-2"></i>What can you do?</h5>
+                    <ul>
+                        <li>Try clearing your browser cookies and cache, then try again</li>
+                        <li>Make sure you're using the latest version of your browser</li>
+                        <li>Try using a different browser</li>
+                        <li>If you're using a VPN or proxy, try disabling it</li>
+                        <li>If the problem persists, please contact support</li>
+                    </ul>
+                </div>
+                
+                <div class="mt-4 text-center">
+                    <a href="/" class="btn btn-primary me-2">Go to Home Page</a>
+                    <a href="/login" class="btn btn-outline-primary">Try Logging In Again</a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

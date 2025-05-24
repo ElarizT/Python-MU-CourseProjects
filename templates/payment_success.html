@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+
+{% block title %}Payment Successful - LightYearAI{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-md-8 mx-auto text-center">
+            <div class="card shadow-sm">
+                <div class="card-body p-5">
+                    <div class="mb-4">
+                        <i class="fas fa-check-circle text-success" style="font-size: 5rem;"></i>
+                    </div>
+                    <h1 class="display-4 mb-4">Payment Successful!</h1>
+                    <p class="lead mb-4">Thank you for upgrading to Premium! Your subscription has been activated successfully.</p>
+                    <p class="mb-4">You now have access to increased token limits and premium features.</p>
+                    <div class="d-grid gap-2 col-6 mx-auto">
+                        <a href="{{ url_for('account') }}" class="btn btn-primary btn-lg">View Your Account</a>
+                        <a href="{{ url_for('study') }}" class="btn btn-outline-primary btn-lg">Start Using Premium</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

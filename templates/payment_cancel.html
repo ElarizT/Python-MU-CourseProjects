@@ -1,0 +1,26 @@
+{% extends "layout.html" %}
+
+{% block title %}Payment Cancelled - LightYearAI{% endblock %}
+
+{% block content %}
+<div class="container py-5">
+    <div class="row">
+        <div class="col-md-8 mx-auto text-center">
+            <div class="card shadow-sm">
+                <div class="card-body p-5">
+                    <div class="mb-4">
+                        <i class="fas fa-times-circle text-secondary" style="font-size: 5rem;"></i>
+                    </div>
+                    <h1 class="display-4 mb-4">Payment Cancelled</h1>
+                    <p class="lead mb-4">Your payment process was cancelled.</p>
+                    <p class="mb-4">No worries! You can upgrade to Premium whenever you're ready.</p>
+                    <div class="d-grid gap-2 col-6 mx-auto">
+                        <a href="{{ url_for('account') }}" class="btn btn-primary btn-lg">Return to Account</a>
+                        <a href="{{ url_for('study') }}" class="btn btn-outline-primary btn-lg">Continue with Free Plan</a>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

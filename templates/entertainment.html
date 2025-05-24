@@ -1,0 +1,1081 @@
+{% extends "base.html" %}
+
+{% block title %}{{ g.translations.entertainment_title }}{% endblock %}
+
+{% block additional_styles %}
+/* Placeholder styling: match Study Buddy default */
+#entertainmentInput::placeholder { color: #6c757d; }
+#entertainmentInput::-webkit-input-placeholder { color: #6c757d; }
+#entertainmentInput::-moz-placeholder { color: #6c757d; }
+#entertainmentInput:-ms-input-placeholder { color: #6c757d; }
+#entertainmentInput:-moz-placeholder { color: #6c757d; }
+/* Make input text white so user entries are visible */
+#entertainmentInput { color: #fff; }
+
+/* Sidebar Chat History Styles */
+.chat-sidebar {
+    background: linear-gradient(180deg, #232946 60%, #1a1f35 100%);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+    max-height: 500px;
+    overflow-y: auto;
+    transition: all 0.3s ease;
+}
+.chat-sidebar h4 {
+    color: #fff;
+    font-size: 1.1rem;
+    margin-bottom: 0.8rem;
+    display: flex;
+    align-items: center;
+}
+.chat-sidebar h4 svg {
+    margin-right: 0.5rem;
+}
+.chat-history-item {
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    color: #e0e7ff;
+    background: rgba(255, 255, 255, 0.05);
+    transition: all 0.2s ease;
+    font-size: 0.9rem;
+    border-left: 3px solid rgba(255, 255, 255, 0.3); /* Changed from transparent to semi-transparent white */
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.chat-history-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-left-color: #a21caf;
+}
+.chat-history-item.active {
+    background: rgba(162, 28, 175, 0.2);
+    border-left-color: #a21caf;
+}
+.chat-history-item .history-date {
+    font-size: 0.75rem;
+    opacity: 0.7;
+    display: block;
+    margin-top: 0.2rem;
+}
+.chat-history-item .history-content {
+    flex-grow: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chat-history-item .history-title {
+    font-weight: 500;
+}
+.chat-history-actions {
+    display: none;
+    margin-left: 0.5rem;
+}
+.chat-history-item:hover .chat-history-actions {
+    display: flex;
+}
+.chat-history-actions button {
+    background: none;
+    border: none;
+    color: #e0e7ff;
+    font-size: 0.85rem;
+    padding: 0.15rem;
+    margin-left: 0.25rem;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}
+.chat-history-actions button:hover {
+    opacity: 1;
+}
+.rename-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+.rename-input:focus {
+    outline: none;
+    border-color: rgba(162, 28, 175, 0.5);
+}
+
+/* Sidebar toggle functionality */
+.sidebar-toggle {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: linear-gradient(90deg, #a21caf 0%, #06b6d4 100%);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+}
+.sidebar-toggle:hover {
+    transform: translateY(-50%) scale(1.1);
+    box-shadow: 0 6px 16px rgba(162, 28, 175, 0.4);
+}
+.sidebar-toggle:active {
+    transform: translateY(-50%) scale(0.95);
+}
+.sidebar-toggle i {
+    font-size: 1rem;
+    transition: all 0.3s ease;
+}
+.sidebar-col {
+    transition: all 0.3s ease;
+}
+.sidebar-hidden {
+    max-width: 0 !important;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+}
+.main-col {
+    transition: all 0.3s ease;
+}
+.main-col.expanded {
+    margin-left: 0;
+    flex: 0 0 100%;
+    max-width: 100%;
+}
+.main-content-wrapper {
+    position: relative;
+}
+@media (max-width: 767.98px) {
+    .sidebar-col {
+        position: fixed;
+        left: 0;
+        top: 0;
+        height: 100%;
+        z-index: 1050;
+        background: rgba(27, 32, 59, 0.95);
+        padding: 1rem;
+        max-width: 300px;
+        width: 80%;
+    }
+    .sidebar-hidden {
+        left: -100%;
+    }
+    .sidebar-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1040;
+        display: none;
+    }
+    .sidebar-overlay.show {
+        display: block;
+    }
+}
+{% endblock %}
+
+{% block content %}
+<div class="sidebar-overlay" id="sidebarOverlay"></div>
+<div class="row">
+    <div class="col-12">
+        <div class="entertainment-hero mb-4">
+            <div class="entertainment-hero-bg"></div>
+            <div class="entertainment-hero-content text-center">
+                <div class="entertainment-hero-icon mb-2">
+                    <svg width="56" height="56" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="22" fill="#a21caf" opacity="0.12"/><path d="M16 32c0-4.418 3.582-8 8-8s8 3.582 8 8" stroke="#a21caf" stroke-width="2.5"/><circle cx="24" cy="20" r="4" stroke="#a21caf" stroke-width="2.5"/></svg>
+                </div>
+                <h1 class="entertainment-hero-title">{{ g.translations.entertainment_title }}</h1>
+                <p class="entertainment-hero-desc">{{ g.translations.entertainment_subtitle|default('Chat about movies, music, games, and more!') }}</p>
+            </div>
+        </div>
+        
+        <div class="row">
+            <!-- Chat Sidebar -->
+            <div class="col-md-3 mb-4 mb-md-0 sidebar-col" id="sidebarCol">
+                <button id="newChatBtn" class="btn btn-primary new-chat-btn">
+                    <i class="fas fa-plus me-2"></i> New Chat
+                </button>
+                <div class="chat-sidebar">
+                    <h4>
+                        <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                            <path d="M20 2H4C2.9 2 2 2.9 2 4V22L6 18H20C21.1 18 22 17.1 22 16V4C22 2.9 21.1 2 20 2Z" stroke="#a21caf" stroke-width="2" fill="none"/>
+                        </svg>
+                        Chat History
+                    </h4>
+                    <div id="entertainmentChatHistory">
+                        <!-- Chat history items will be populated here -->
+                        <div class="text-center text-muted p-2" id="noHistoryMessage">
+                            <small>No previous chats</small>
+                        </div>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Main Chat Area -->
+            <div class="col-md-9 main-col" id="mainCol">
+                <button id="sidebarToggle" class="sidebar-toggle" title="Close sidebar">
+                    <i class="fas fa-chevron-left" id="toggleIcon"></i>
+                </button>
+                <div class="main-content-wrapper">
+                    <div class="card-header d-flex justify-content-between align-items-center">
+                        <h3><span style="vertical-align:middle;display:inline-block;margin-right:0.5rem;">
+                          <svg width="28" height="28" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="22" fill="#06b6d4" opacity="0.12"/><path d="M16 32c0-4.418 3.582-8 8-8s8 3.582 8 8" stroke="#06b6d4" stroke-width="2.5"/><circle cx="24" cy="20" r="4" stroke="#06b6d4" stroke-width="2.5"/></svg>
+                        </span>{{ g.translations.entertainment_title }}</h3>
+                        <div class="chat-header-icons">
+                            <i class="fas fa-info-circle" data-bs-toggle="tooltip" title="{{ g.translations.entertainment_tooltip }}"></i>
+                        </div>
+                    </div>
+                    <div class="card-body">
+                        <div class="entertainment-categories">
+                            <div class="category-badge active" data-category="all">
+                                <span style="vertical-align:middle;display:inline-block;margin-right:0.3rem;">
+                                  <!-- Star SVG -->
+                                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><polygon points="12,2 15,9 22,9.5 17,14.5 18.5,22 12,18 5.5,22 7,14.5 2,9.5 9,9" fill="#facc15" stroke="#a21caf" stroke-width="1.2"/></svg>
+                                </span>{{ g.translations.category_all }}
+                            </div>
+                            <div class="category-badge" data-category="movies">
+                                <span style="vertical-align:middle;display:inline-block;margin-right:0.3rem;">
+                                  <!-- Film SVG -->
+                                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="3" y="7" width="18" height="10" rx="2" fill="#6366f1"/><rect x="7" y="10" width="10" height="4" rx="1" fill="#fff"/><circle cx="6" cy="12" r="1.5" fill="#a21caf"/><circle cx="18" cy="12" r="1.5" fill="#a21caf"/></svg>
+                                </span>{{ g.translations.category_movies }}
+                            </div>
+                            <div class="category-badge" data-category="tvshows">
+                                <span style="vertical-align:middle;display:inline-block;margin-right:0.3rem;">
+                                  <!-- TV SVG -->
+                                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="4" y="7" width="16" height="10" rx="2" fill="#06b6d4"/><rect x="8" y="17" width="8" height="2" rx="1" fill="#fff"/></svg>
+                                </span>{{ g.translations.category_tvshows }}
+                            </div>
+                            <div class="category-badge" data-category="videogames">
+                                <span style="vertical-align:middle;display:inline-block;margin-right:0.3rem;">
+                                  <!-- Gamepad SVG -->
+                                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="5" y="10" width="14" height="6" rx="3" fill="#a21caf"/><circle cx="8" cy="13" r="1" fill="#fff"/><circle cx="16" cy="13" r="1" fill="#fff"/></svg>
+                                </span>{{ g.translations.category_videogames }}
+                            </div>
+                            <div class="category-badge" data-category="music">
+                                <span style="vertical-align:middle;display:inline-block;margin-right:0.3rem;">
+                                  <!-- Music SVG -->
+                                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="14" y="4" width="2" height="10" rx="1" fill="#06b6d4"/><circle cx="15" cy="18" r="2" fill="#6366f1"/><rect x="6" y="8" width="2" height="6" rx="1" fill="#06b6d4"/><circle cx="7" y="17" r="2" fill="#a21caf"/></svg>
+                                </span>{{ g.translations.category_music }}
+                            </div>
+                            <div class="category-badge" data-category="books">
+                                <span style="vertical-align:middle;display:inline-block;margin-right:0.3rem;">
+                                  <!-- Book SVG -->
+                                  <svg width="18" height="18" viewBox="0 0 24 24" fill="none"><rect x="4" y="6" width="7" height="12" rx="2" fill="#6366f1"/><rect x="13" y="6" width="7" height="12" rx="2" fill="#a21caf"/></svg>
+                                </span>{{ g.translations.category_books }}
+                            </div>
+                        </div>
+                        
+                        <div class="chat-container" id="entertainmentChatContainer">
+                            <div class="bot-message message">
+                                <p>{{ g.translations.entertainment_welcome }}</p>
+                                <div class="suggestion-chips">
+                                    <div class="suggestion-chip">{{ g.translations.suggestion_popular_movies }}</div>
+                                    <div class="suggestion-chip">{{ g.translations.suggestion_tv_show }}</div>
+                                    <div class="suggestion-chip">{{ g.translations.suggestion_video_games }}</div>
+                                    <div class="suggestion-chip">{{ g.translations.suggestion_music }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div id="typingIndicator" class="typing-indicator d-none">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                        <div class="mt-3 position-relative">
+                            <form id="entertainmentForm" class="d-flex">
+                                <input type="text" class="form-control message-input me-2" id="entertainmentInput" placeholder="{{ g.translations.type_message }}">
+                                <button type="button" class="btn btn-outline-secondary me-2" id="emojiBtn">
+                                    <i class="far fa-smile"></i>
+                                </button>
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                            </form>
+                            <div id="emojiPicker" class="emoji-picker d-none">
+                                <!-- Emojis will be added here dynamically -->
+                            </div>
+                        </div>
+                        <div class="entertainment-resources modern-study-tips">
+                            <div class="study-tips-header d-flex align-items-center mb-2">
+                                <div class="tips-icon-bg me-2">
+                                    <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="11" fill="#a21caf" opacity="0.13"/><path d="M12 18v1.5M9 21h6" stroke="#a21caf" stroke-width="1.5" stroke-linecap="round"/><path d="M8 15a4 4 0 1 1 8 0c0 1.5-1 2.5-2 3h-4c-1-0.5-2-1.5-2-3z" stroke="#a21caf" stroke-width="1.5" fill="#fff"/></svg>
+                                </div>
+                                <h4 class="mb-0">{{ g.translations.entertainment_tips_title|default('Entertainment Tips') }}</h4>
+                            </div>
+                            <ul class="tips-list">
+                                <li><span class="tip-badge">1</span> <strong>{{ g.translations.entertainment_tip_fun|default('Keep it fun!') }}</strong> <span class="tip-desc">{{ g.translations.entertainment_tip_fun_desc|default('Ask about movies, music, games, and more!') }}</span></li>
+                                <li><span class="tip-badge">2</span> <strong>{{ g.translations.entertainment_tip_specific|default('Be specific') }}</strong> <span class="tip-desc">{{ g.translations.entertainment_tip_specific_desc|default('Mention genres, artists, or titles for better results') }}</span></li>
+                                <li><span class="tip-badge">3</span> <strong>{{ g.translations.entertainment_tip_explore|default('Explore categories') }}</strong> <span class="tip-desc">{{ g.translations.entertainment_tip_explore_desc|default('Switch topics using the colored chips above') }}</span></li>
+                                <li><span class="tip-badge">4</span> <strong>{{ g.translations.entertainment_tip_emoji|default('Use emojis') }}</strong> <span class="tip-desc">{{ g.translations.entertainment_tip_emoji_desc|default('Express yourself and get creative!') }}</span></li>
+                            </ul>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Confirmation Modal for Delete -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-labelledby="deleteConfirmModalLabel" aria-hidden="true">
+    <div class="modal-dialog modal-dialog-centered">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="deleteConfirmModalLabel">Confirm Delete</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <div class="modal-body">
+                Are you sure you want to delete this chat history?
+            </div>
+            <div class="modal-footer">
+                <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Cancel</button>
+                <button type="button" class="btn btn-danger" id="confirmDeleteBtn">Delete</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block additional_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const chatContainer = document.getElementById('entertainmentChatContainer');
+        const entertainmentForm = document.getElementById('entertainmentForm');
+        const entertainmentInput = document.getElementById('entertainmentInput');
+        const typingIndicator = document.getElementById('typingIndicator');
+        const categoryBadges = document.querySelectorAll('.category-badge');
+        const suggestionChips = document.querySelectorAll('.suggestion-chip');
+        const emojiBtn = document.getElementById('emojiBtn');
+        const emojiPicker = document.getElementById('emojiPicker');
+        const newChatBtn = document.getElementById('newChatBtn');
+        const chatHistoryContainer = document.getElementById('entertainmentChatHistory');
+        const noHistoryMessage = document.getElementById('noHistoryMessage');
+        
+        // Sidebar toggle elements
+        const sidebarToggle = document.getElementById('sidebarToggle');
+        const toggleIcon = document.getElementById('toggleIcon');
+        const sidebarCol = document.getElementById('sidebarCol');
+        const mainCol = document.getElementById('mainCol');
+        const sidebarOverlay = document.getElementById('sidebarOverlay');
+        
+        // Delete confirmation modal
+        const deleteConfirmModal = new bootstrap.Modal(document.getElementById('deleteConfirmModal'));
+        const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+        let chatToDelete = null;
+        
+        let messageHistory = [];
+        let currentCategory = 'all';
+        let currentChatId = generateChatId();
+        let savedChats = loadSavedChats('entertainment');
+        let sidebarVisible = true;
+        let isRenaming = false;
+        
+        // Initialize by loading saved chats
+        updateChatHistory();
+        
+        // Sidebar toggle functionality
+        sidebarToggle.addEventListener('click', toggleSidebar);
+        sidebarOverlay.addEventListener('click', closeSidebar);
+        
+        function toggleSidebar() {
+            if (sidebarVisible) {
+                closeSidebar();
+            } else {
+                openSidebar();
+            }
+        }
+        
+        function closeSidebar() {
+            // Add a slight delay to allow for smooth transition
+            sidebarCol.classList.add('sidebar-hidden');
+            
+            // Wait for transition to complete before updating other elements
+            setTimeout(() => {
+                mainCol.classList.add('expanded');
+                
+                // Update icon
+                toggleIcon.classList.remove('fa-chevron-left');
+                toggleIcon.classList.add('fa-chevron-right');
+                
+                // Update state
+                sidebarVisible = false;
+                sidebarToggle.title = 'Open sidebar';
+                
+                // Hide overlay
+                sidebarOverlay.classList.remove('show');
+            }, 50);
+        }
+        
+        function openSidebar() {
+            // Update layout first
+            mainCol.classList.remove('expanded');
+            
+            // Add a slight delay before showing sidebar for smoother transition
+            setTimeout(() => {
+                // Remove classes
+                sidebarCol.classList.remove('sidebar-hidden');
+                
+                // Update icon
+                toggleIcon.classList.remove('fa-chevron-right');
+                toggleIcon.classList.add('fa-chevron-left');
+                
+                // Update state
+                sidebarVisible = true;
+                sidebarToggle.title = 'Close sidebar';
+                
+                // On mobile, show the overlay
+                if (window.innerWidth < 768) {
+                    sidebarOverlay.classList.add('show');
+                }
+            }, 50);
+        }
+        
+        // Adjust sidebar display on window resize
+        window.addEventListener('resize', function() {
+            if (window.innerWidth >= 768) {
+                sidebarOverlay.classList.remove('show');
+            } else if (sidebarVisible) {
+                sidebarOverlay.classList.add('show');
+            }
+        });
+        
+        // New chat button functionality
+        newChatBtn.addEventListener('click', function() {
+            // Save current chat if it has messages
+            if (messageHistory.length > 0) {
+                saveCurrentChat();
+            }
+            
+            // Start a new chat
+            messageHistory = [];
+            currentChatId = generateChatId();
+            
+            // Reset chat UI
+            chatContainer.innerHTML = '';
+            const welcomeMessage = document.createElement('div');
+            welcomeMessage.className = 'bot-message message';
+            welcomeMessage.innerHTML = `
+                <p>{{ g.translations.entertainment_welcome }}</p>
+                <div class="suggestion-chips">
+                    <div class="suggestion-chip">{{ g.translations.suggestion_popular_movies }}</div>
+                    <div class="suggestion-chip">{{ g.translations.suggestion_tv_show }}</div>
+                    <div class="suggestion-chip">{{ g.translations.suggestion_video_games }}</div>
+                    <div class="suggestion-chip">{{ g.translations.suggestion_music }}</div>
+                </div>
+            `;
+            chatContainer.appendChild(welcomeMessage);
+            
+            // Reset category to 'all'
+            categoryBadges.forEach(badge => badge.classList.remove('active'));
+            document.querySelector('.category-badge[data-category="all"]').classList.add('active');
+            currentCategory = 'all';
+            
+            // Update chat history sidebar and add event listeners to new suggestion chips
+            updateChatHistory();
+            
+            // Add listeners to the new suggestion chips
+            const newSuggestionChips = welcomeMessage.querySelectorAll('.suggestion-chip');
+            newSuggestionChips.forEach(chip => {
+                chip.addEventListener('click', () => {
+                    entertainmentInput.value = chip.textContent;
+                    entertainmentForm.dispatchEvent(new Event('submit'));
+                });
+            });
+            
+            // Focus on input
+            entertainmentInput.focus();
+            
+            // On mobile, close sidebar after starting new chat
+            if (window.innerWidth < 768) {
+                closeSidebar();
+            }
+        });
+        
+        // Initialize tooltips
+        const tooltipTriggerList = document.querySelectorAll('[data-bs-toggle="tooltip"]');
+        [...tooltipTriggerList].map(tooltipTriggerEl => new bootstrap.Tooltip(tooltipTriggerEl));
+        
+        // Set up emoji picker
+        const emojis = ['😀', '😂', '🤣', '😊', '😍', '🎬', '📺', '🎮', '🎵', '📚', 
+                        '👍', '👎', '❤️', '🔥', '🌟', '🍿', '😭', '😎', '🤔', '👏',
+                        '🙌', '🤩', '😴', '😱', '🤯', '💯', '🎯', '🏆', '🎸', '🎧'];
+        
+        // Create emoji elements
+        emojis.forEach(emoji => {
+            const emojiElement = document.createElement('div');
+            emojiElement.className = 'emoji-item';
+            emojiElement.textContent = emoji;
+            emojiElement.addEventListener('click', () => {
+                entertainmentInput.value += emoji;
+                // Always hide emoji picker after selection
+                emojiPicker.classList.add('d-none');
+                // Focus on input after selection
+                entertainmentInput.focus();
+            });
+            emojiPicker.appendChild(emojiElement);
+        });
+        
+        // Ensure emoji picker is hidden by default
+        emojiPicker.classList.add('d-none');
+        
+        // Toggle emoji picker only on emoji button click
+        emojiBtn.addEventListener('click', (e) => {
+            e.stopPropagation(); // Prevent document click from immediately closing it
+            if (emojiPicker.classList.contains('d-none')) {
+                // Show emoji picker
+                emojiPicker.classList.remove('d-none');
+                emojiPicker.classList.add('d-block');
+            } else {
+                // Hide emoji picker
+                emojiPicker.classList.remove('d-block');
+                emojiPicker.classList.add('d-none');
+            }
+        });
+        
+        // Close emoji picker when clicking outside
+        document.addEventListener('click', (e) => {
+            if (!emojiBtn.contains(e.target) && !emojiPicker.contains(e.target)) {
+                emojiPicker.classList.remove('d-block');
+                emojiPicker.classList.add('d-none');
+            }
+        });
+        
+        // Close emoji picker when submitting the form
+        entertainmentForm.addEventListener('submit', () => {
+            emojiPicker.classList.remove('d-block');
+            emojiPicker.classList.add('d-none');
+        });
+        
+        // Close emoji picker when pressing Escape key
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'Escape') {
+                emojiPicker.classList.remove('d-block');
+                emojiPicker.classList.add('d-none');
+            }
+        });
+        
+        // Function to add a message to the chat
+        function addMessage(content, isUser = false) {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = isUser ? 'user-message message' : 'bot-message message';
+            messageDiv.innerHTML = content;
+            // add copy button to each message
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'btn btn-sm btn-outline-secondary copy-btn ms-2';
+            copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+            copyBtn.title = 'Copy message';
+            copyBtn.addEventListener('click', () => navigator.clipboard.writeText(messageDiv.innerText.trim()));
+            messageDiv.appendChild(copyBtn);
+            chatContainer.appendChild(messageDiv);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            // Save message to history
+            messageHistory.push({
+                role: isUser ? 'user' : 'assistant',
+                content: content,
+                category: currentCategory,
+                timestamp: new Date().toISOString()
+            });
+            
+            // Auto-save chat after each message
+            saveCurrentChat();
+            
+            // Update chat history sidebar
+            updateChatHistory();
+        }
+        
+        // Handle form submission
+        entertainmentForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            const userInput = entertainmentInput.value.trim();
+            
+            if (userInput) {
+                // Add user message to chat
+                addMessage(`<p>${userInput}</p>`, true);
+                
+                // Clear input field
+                entertainmentInput.value = '';
+                
+                // Show typing indicator
+                typingIndicator.classList.remove('d-none');
+                
+                // Send request to server
+                fetch('/entertainment/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: userInput,
+                        category: currentCategory,
+                        history: messageHistory
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Hide typing indicator
+                    typingIndicator.classList.add('d-none');
+                    
+                    // Add bot response to chat
+                    if (data.response) {
+                        addMessage(data.response);
+                        
+                        // Add suggestion chips if provided
+                        if (data.suggestions && data.suggestions.length) {
+                            const suggestionsDiv = document.createElement('div');
+                            suggestionsDiv.className = 'suggestion-chips';
+                            
+                            data.suggestions.forEach(suggestion => {
+                                const chip = document.createElement('div');
+                                chip.className = 'suggestion-chip';
+                                chip.textContent = suggestion;
+                                chip.addEventListener('click', () => {
+                                    entertainmentInput.value = suggestion;
+                                    entertainmentForm.dispatchEvent(new Event('submit'));
+                                });
+                                suggestionsDiv.appendChild(chip);
+                            });
+                            
+                            const lastMessage = chatContainer.lastElementChild;
+                            lastMessage.appendChild(suggestionsDiv);
+                        }
+                    } else {
+                        addMessage('<p>Sorry, I encountered an error. Please try again.</p>');
+                    }
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    typingIndicator.classList.add('d-none');
+                    addMessage('<p>Sorry, I encountered an error. Please try again.</p>');
+                });
+            }
+        });
+        
+        // Handle category selection
+        categoryBadges.forEach(badge => {
+            badge.addEventListener('click', () => {
+                // Update active category
+                categoryBadges.forEach(b => b.classList.remove('active'));
+                badge.classList.add('active');
+                currentCategory = badge.dataset.category;
+                
+                // Add category change message
+                if (messageHistory.length > 1) {
+                    const categoryNames = {
+                        'all': '{{ g.translations.category_all_topics }}',
+                        'movies': '{{ g.translations.category_movies }}',
+                        'tvshows': '{{ g.translations.category_tvshows }}',
+                        'videogames': '{{ g.translations.category_videogames }}',
+                        'music': '{{ g.translations.category_music }}',
+                        'books': '{{ g.translations.category_books }}'
+                    };
+                    
+                    addMessage(`<p>{{ g.translations.now_chatting_about }} ${categoryNames[currentCategory]}!</p>`);
+                }
+            });
+        });
+        
+        // Handle suggestion chips
+        suggestionChips.forEach(chip => {
+            chip.addEventListener('click', () => {
+                entertainmentInput.value = chip.textContent;
+                entertainmentForm.dispatchEvent(new Event('submit'));
+            });
+        });
+        
+        // Chat History Functions
+        function generateChatId() {
+            return Date.now().toString(36) + Math.random().toString(36).substring(2);
+        }
+        
+        function saveCurrentChat() {
+            if (messageHistory.length < 2) return; // Don't save chats with only the welcome message
+            
+            const userMessages = messageHistory.filter(msg => msg.role === 'user');
+            if (userMessages.length === 0) return; // Don't save if no user messages
+            
+            // Get first user message as title, truncate if needed
+            let title = userMessages[0].content.replace(/<[^>]*>/g, '').trim();
+            title = title.length > 30 ? title.substring(0, 27) + '...' : title;
+            
+            const chat = {
+                id: currentChatId,
+                title: title,
+                timestamp: new Date().toISOString(),
+                messages: messageHistory,
+                lastCategory: currentCategory,
+                customTitle: null // Add this field for custom titles
+            };
+            
+            // Load existing chats and add/update current one
+            let chats = loadSavedChats('entertainment');
+            const existingIndex = chats.findIndex(c => c.id === currentChatId);
+            
+            if (existingIndex >= 0) {
+                // Preserve custom title if it exists
+                if (chats[existingIndex].customTitle) {
+                    chat.customTitle = chats[existingIndex].customTitle;
+                }
+                chats[existingIndex] = chat;
+            } else {
+                chats.push(chat);
+            }
+            
+            // Keep only the most recent 20 chats
+            if (chats.length > 20) {
+                chats.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+                chats = chats.slice(0, 20);
+            }
+            
+            // Save to local storage
+            localStorage.setItem('entertainmentChats', JSON.stringify(chats));
+            savedChats = chats;
+        }
+        
+        function loadSavedChats(type) {
+            const key = type + 'Chats'; // 'studyChats' or 'entertainmentChats'
+            const saved = localStorage.getItem(key);
+            return saved ? JSON.parse(saved) : [];
+        }
+        
+        function loadChat(chatId) {
+            const chat = savedChats.find(c => c.id === chatId);
+            if (!chat) return;
+            
+            // Save current chat if needed
+            if (messageHistory.length > 0) {
+                saveCurrentChat();
+            }
+            
+            // Switch to the selected chat
+            currentChatId = chatId;
+            messageHistory = [...chat.messages];
+            
+            // Set the current category
+            if (chat.lastCategory) {
+                currentCategory = chat.lastCategory;
+                categoryBadges.forEach(badge => {
+                    badge.classList.remove('active');
+                    if (badge.dataset.category === currentCategory) {
+                        badge.classList.add('active');
+                    }
+                });
+            }
+            
+            // Update UI
+            chatContainer.innerHTML = '';
+            messageHistory.forEach(msg => {
+                const messageDiv = document.createElement('div');
+                messageDiv.className = msg.role === 'user' ? 'user-message message' : 'bot-message message';
+                messageDiv.innerHTML = msg.content;
+                
+                // Add copy button
+                const copyBtn = document.createElement('button');
+                copyBtn.className = 'btn btn-sm btn-outline-secondary copy-btn ms-2';
+                copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                copyBtn.title = 'Copy message';
+                copyBtn.addEventListener('click', () => navigator.clipboard.writeText(messageDiv.innerText.trim()));
+                messageDiv.appendChild(copyBtn);
+                
+                chatContainer.appendChild(messageDiv);
+                
+                // Add suggestion chips for assistant messages if they exist in the HTML
+                if (msg.role === 'assistant') {
+                    const suggestionChipsContainer = msg.content.match(/<div class="suggestion-chips">.*?<\/div>/s);
+                    if (suggestionChipsContainer) {
+                        const tempDiv = document.createElement('div');
+                        tempDiv.innerHTML = suggestionChipsContainer[0];
+                        const chips = tempDiv.querySelectorAll('.suggestion-chip');
+                        
+                        if (chips.length > 0) {
+                            const suggestionsDiv = document.createElement('div');
+                            suggestionsDiv.className = 'suggestion-chips';
+                            
+                            chips.forEach(chip => {
+                                const newChip = document.createElement('div');
+                                newChip.className = 'suggestion-chip';
+                                newChip.textContent = chip.textContent;
+                                newChip.addEventListener('click', () => {
+                                    entertainmentInput.value = newChip.textContent;
+                                    entertainmentForm.dispatchEvent(new Event('submit'));
+                                });
+                                suggestionsDiv.appendChild(newChip);
+                            });
+                            
+                            messageDiv.appendChild(suggestionsDiv);
+                        }
+                    }
+                }
+            });
+            
+            // Scroll to bottom
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+            
+            // Update chat history sidebar
+            updateChatHistory();
+            
+            // On mobile, close sidebar after selecting a chat
+            if (window.innerWidth < 768) {
+                closeSidebar();
+            }
+        }
+        
+        function deleteChat(chatId) {
+            chatToDelete = chatId;
+            deleteConfirmModal.show();
+        }
+        
+        confirmDeleteBtn.addEventListener('click', function() {
+            if (!chatToDelete) return;
+            
+            // Remove chat from saved chats
+            savedChats = savedChats.filter(chat => chat.id !== chatToDelete);
+            
+            // Save updated chats to local storage
+            localStorage.setItem('entertainmentChats', JSON.stringify(savedChats));
+            
+            // If we're deleting the current chat, start a new one
+            if (chatToDelete === currentChatId) {
+                // Start a new chat (simplified version - not repeating all the newChatBtn code)
+                messageHistory = [];
+                currentChatId = generateChatId();
+                
+                // Reset chat UI
+                chatContainer.innerHTML = '';
+                const welcomeMessage = document.createElement('div');
+                welcomeMessage.className = 'bot-message message';
+                welcomeMessage.innerHTML = `
+                    <p>{{ g.translations.entertainment_welcome }}</p>
+                    <div class="suggestion-chips">
+                        <div class="suggestion-chip">{{ g.translations.suggestion_popular_movies }}</div>
+                        <div class="suggestion-chip">{{ g.translations.suggestion_tv_show }}</div>
+                        <div class="suggestion-chip">{{ g.translations.suggestion_video_games }}</div>
+                        <div class="suggestion-chip">{{ g.translations.suggestion_music }}</div>
+                    </div>
+                `;
+                chatContainer.appendChild(welcomeMessage);
+                
+                // Reset category to 'all'
+                categoryBadges.forEach(badge => badge.classList.remove('active'));
+                document.querySelector('.category-badge[data-category="all"]').classList.add('active');
+                currentCategory = 'all';
+                
+                // Add listeners to the new suggestion chips
+                const newSuggestionChips = welcomeMessage.querySelectorAll('.suggestion-chip');
+                newSuggestionChips.forEach(chip => {
+                    chip.addEventListener('click', () => {
+                        entertainmentInput.value = chip.textContent;
+                        entertainmentForm.dispatchEvent(new Event('submit'));
+                    });
+                });
+            }
+            
+            // Close the modal
+            deleteConfirmModal.hide();
+            chatToDelete = null;
+            
+            // Update chat history sidebar
+            updateChatHistory();
+        });
+        
+        function renameChat(chatId, event) {
+            event.stopPropagation();
+            
+            if (isRenaming) return; // Prevent multiple rename fields
+            isRenaming = true;
+            
+            const chatIndex = savedChats.findIndex(chat => chat.id === chatId);
+            if (chatIndex === -1) return;
+            
+            const chat = savedChats[chatIndex];
+            const chatItem = event.target.closest('.chat-history-item');
+            const contentElement = chatItem.querySelector('.history-content');
+            
+            // Store original content to restore if cancelled
+            const originalContent = contentElement.innerHTML;
+            
+            // Create input field
+            const inputElement = document.createElement('input');
+            inputElement.type = 'text';
+            inputElement.className = 'rename-input';
+            inputElement.value = chat.customTitle || chat.title;
+            
+            // Replace content with input
+            contentElement.innerHTML = '';
+            contentElement.appendChild(inputElement);
+            
+            // Focus and select all text
+            inputElement.focus();
+            inputElement.select();
+            
+            // Handle Enter key to save
+            inputElement.addEventListener('keyup', function(e) {
+                if (e.key === 'Enter') {
+                    finishRenaming(chatId, inputElement.value, contentElement, chatItem);
+                } else if (e.key === 'Escape') {
+                    // Cancel rename on Escape
+                    contentElement.innerHTML = originalContent;
+                    isRenaming = false;
+                }
+            });
+            
+            // Handle click outside to save
+            const clickOutsideHandler = function(e) {
+                if (!contentElement.contains(e.target)) {
+                    finishRenaming(chatId, inputElement.value, contentElement, chatItem);
+                    document.removeEventListener('click', clickOutsideHandler);
+                }
+            };
+            
+            // Add event listener with a small delay to prevent immediate trigger
+            setTimeout(() => {
+                document.addEventListener('click', clickOutsideHandler);
+            }, 100);
+        }
+        
+        function finishRenaming(chatId, newTitle, contentElement, chatItem) {
+            if (!isRenaming) return;
+            isRenaming = false;
+            
+            // Validate input
+            newTitle = newTitle.trim();
+            if (!newTitle) {
+                // If empty, revert to original title
+                updateChatHistory();
+                return;
+            }
+            
+            // Update chat title
+            const chatIndex = savedChats.findIndex(chat => chat.id === chatId);
+            if (chatIndex >= 0) {
+                savedChats[chatIndex].customTitle = newTitle;
+                
+                // Save to local storage
+                localStorage.setItem('entertainmentChats', JSON.stringify(savedChats));
+                
+                // Update UI
+                const titleSpan = document.createElement('span');
+                titleSpan.className = 'history-title';
+                titleSpan.textContent = newTitle;
+                
+                const dateSpan = document.createElement('span');
+                dateSpan.className = 'history-date';
+                const date = new Date(savedChats[chatIndex].timestamp);
+                dateSpan.textContent = date.toLocaleDateString() + ' ' + 
+                                       date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                
+                contentElement.innerHTML = '';
+                contentElement.appendChild(titleSpan);
+                contentElement.appendChild(dateSpan);
+                
+                // If this is the current chat and we're viewing it, update currentChatId
+                if (chatId === currentChatId) {
+                    // The chat is already loaded, we just renamed it
+                    chatItem.classList.add('active');
+                }
+            }
+        }
+        
+        function updateChatHistory() {
+            chatHistoryContainer.innerHTML = '';
+            
+            if (savedChats.length === 0) {
+                noHistoryMessage.style.display = 'block';
+                return;
+            }
+            
+            noHistoryMessage.style.display = 'none';
+            
+            // Sort chats by timestamp, newest first
+            const sortedChats = [...savedChats].sort((a, b) => 
+                new Date(b.timestamp) - new Date(a.timestamp)
+            );
+            
+            // Add each chat to the sidebar
+            sortedChats.forEach(chat => {
+                const chatItem = document.createElement('div');
+                chatItem.className = 'chat-history-item';
+                if (chat.id === currentChatId) {
+                    chatItem.classList.add('active');
+                }
+                
+                const date = new Date(chat.timestamp);
+                const formattedDate = date.toLocaleDateString() + ' ' + 
+                                      date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+                
+                // Create chat content div (title and date)
+                const contentDiv = document.createElement('div');
+                contentDiv.className = 'history-content';
+                
+                const titleSpan = document.createElement('span');
+                titleSpan.className = 'history-title';
+                titleSpan.textContent = chat.customTitle || chat.title;
+                
+                const dateSpan = document.createElement('span');
+                dateSpan.className = 'history-date';
+                dateSpan.textContent = formattedDate;
+                
+                contentDiv.appendChild(titleSpan);
+                contentDiv.appendChild(dateSpan);
+                
+                // Create actions div with rename and delete buttons
+                const actionsDiv = document.createElement('div');
+                actionsDiv.className = 'chat-history-actions';
+                
+                const renameBtn = document.createElement('button');
+                renameBtn.innerHTML = '<i class="fas fa-edit"></i>';
+                renameBtn.title = 'Rename chat';
+                renameBtn.addEventListener('click', (e) => renameChat(chat.id, e));
+                
+                const deleteBtn = document.createElement('button');
+                deleteBtn.innerHTML = '<i class="fas fa-trash-alt"></i>';
+                deleteBtn.title = 'Delete chat';
+                deleteBtn.addEventListener('click', (e) => {
+                    e.stopPropagation();
+                    deleteChat(chat.id);
+                });
+                
+                actionsDiv.appendChild(renameBtn);
+                actionsDiv.appendChild(deleteBtn);
+                
+                // Add content and actions to chat item
+                chatItem.appendChild(contentDiv);
+                chatItem.appendChild(actionsDiv);
+                
+                // Add click handler to load chat when clicking on the item (but not on buttons)
+                chatItem.addEventListener('click', () => loadChat(chat.id));
+                
+                chatHistoryContainer.appendChild(chatItem);
+            });
+        }
+    });
+</script>
+<!-- Toast container for copy notification -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+  <div id="copyToast" class="toast align-items-center text-white bg-primary border-0" role="alert" aria-live="assertive" aria-atomic="true">
+    <div class="d-flex">
+      <div class="toast-body">
+        Message copied!
+      </div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+  </div>
+</div>
+{% endblock %}

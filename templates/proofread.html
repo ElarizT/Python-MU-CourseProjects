@@ -1,0 +1,454 @@
+{% extends "base.html" %}
+
+{% block title %}{{ g.translations.nav_proofread|default('Proofreading Service') }}{% endblock %}
+
+{% block additional_styles %}
+/* Remove inline styles, now handled in custom.css */
+.upload-container {
+    border: 2px dashed #007bff;
+    border-radius: 15px;
+    padding: 40px 20px;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.3s;
+    background-color: rgba(0, 123, 255, 0.05);
+}
+
+.upload-container:hover {
+    background-color: rgba(0, 123, 255, 0.1);
+}
+
+.upload-icon {
+    font-size: 3rem;
+    color: #007bff;
+    margin-bottom: 15px;
+}
+
+.corrections-list {
+    max-height: 300px;
+    overflow-y: auto;
+    border-left: 3px solid #28a745;
+    padding-left: 15px;
+}
+
+.correction-item {
+    margin-bottom: 15px;
+    padding-bottom: 15px;
+    border-bottom: 1px solid #f1f1f1;
+}
+
+.original-text {
+    text-decoration: line-through;
+    color: #dc3545;
+}
+
+.corrected-text {
+    color: #28a745;
+    font-weight: 500;
+}
+
+.explanation {
+    color: #6c757d;
+    font-style: italic;
+    margin-top: 5px;
+}
+
+.file-info {
+    display: flex;
+    align-items: center;
+    padding: 10px;
+    background-color: #f8f9fa;
+    border-radius: 10px;
+    margin-bottom: 15px;
+}
+
+.file-info i {
+    font-size: 1.5rem;
+    margin-right: 10px;
+    color: #6c757d;
+}
+
+.progress {
+    height: 5px;
+    margin-top: 15px;
+}
+{% endblock %}
+
+{% block content %}
+<div class="row">
+    <div class="col-lg-8 mx-auto" id="proofread-container">
+        <div class="card mb-4">
+            <div class="card-header">
+                <h3><span style="vertical-align:middle;display:inline-block;margin-right:0.5rem;">
+                  <svg width="28" height="28" viewBox="0 0 48 48" fill="none"><circle cx="24" cy="24" r="22" fill="#a21caf" opacity="0.12"/><rect x="14" y="14" width="20" height="20" rx="3" stroke="#a21caf" stroke-width="2.5"/><path d="M18 24h12M18 28h8" stroke="#a21caf" stroke-width="2.5" stroke-linecap="round"/></svg>
+                </span>{{ g.translations.nav_proofread|default('Proofreading Service') }}</h3>
+                <p class="mb-0">{{ g.translations.proofread_desc|default('Upload your document for comprehensive proofreading and receive a corrected PDF version.') }}</p>
+            </div>
+            <div class="card-body">
+                <!-- mode toggle buttons -->
+                <div class="d-flex mb-3">
+                    <button id="btnFileMode" class="btn btn-primary me-2">{{ g.translations.proofread_upload_mode|default('Upload File') }}</button>
+                    <button id="btnTextMode" class="btn btn-outline-primary">{{ g.translations.proofread_write_mode|default('Write Text') }}</button>
+                </div>
+                <div id="uploadSection">
+                    <div class="upload-container" id="dropZone">
+                        <span style="display:block;margin-bottom:0.5rem;">
+                            <!-- Magic wand + document SVG -->
+                            <svg width="48" height="48" viewBox="0 0 48 48" fill="none">
+                              <rect x="10" y="14" width="20" height="24" rx="4" fill="#fff" stroke="#a21caf" stroke-width="2.2"/>
+                              <rect x="14" y="20" width="12" height="2" rx="1" fill="#a21caf"/>
+                              <rect x="14" y="26" width="8" height="2" rx="1" fill="#a21caf"/>
+                              <path d="M34 14l4 4" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round"/>
+                              <path d="M38 14l-4 4" stroke="#06b6d4" stroke-width="2.2" stroke-linecap="round"/>
+                              <circle cx="36" cy="16" r="2" fill="#06b6d4"/>
+                            </svg>
+                        </span>
+                        <h4>{{ g.translations.proofread_drop_files|default('Drop your file here or click to browse') }}</h4>
+                        <p class="text-muted">{{ g.translations.proofread_supported_formats|default('Supported formats: TXT, DOCX, PDF (up to 10MB)') }}</p>
+                        <input type="file" id="fileInput" class="d-none" accept=".txt,.docx,.pdf">
+                    </div>
+                </div>
+                <!-- textarea input section for writing text -->
+                <div id="textSection" class="d-none">
+                    <form id="proofread-form">
+                        <textarea id="proofread-text" class="form-control mb-2" rows="10" placeholder="{{ g.translations.proofread_text_placeholder|default('Paste or write your text here...') }}"></textarea>
+                        <button type="submit" id="textSubmitBtn" class="btn btn-primary">{{ g.translations.proofread_proofread_text|default('Proofread Text') }}</button>
+                    </form>
+                </div>
+                <div id="processingSection" class="d-none">
+                    <div class="file-info">
+                        <i class="fas fa-file-alt"></i>
+                        <div>
+                            <h5 id="fileName" class="mb-0">document.docx</h5>
+                            <small id="fileSize" class="text-muted">1.2 MB</small>
+                        </div>
+                    </div>
+                    
+                    <div class="text-center py-4">
+                        <div class="spinner-border text-primary" role="status">
+                            <span class="visually-hidden">{{ g.translations.loading|default('Loading...') }}</span>
+                        </div>
+                        <h5 class="mt-3">{{ g.translations.proofread_processing|default('Proofreading your document...') }}</h5>
+                        <p class="text-muted" id="statusMessage">{{ g.translations.proofread_analyzing|default('Analyzing text and identifying errors') }}</p>
+                        <div class="progress">
+                            <div id="progressBar" class="progress-bar progress-bar-striped progress-bar-animated" style="width: 25%"></div>
+                        </div>
+                    </div>
+                </div>
+                
+                <div id="proofread-result" class="d-none">
+                    <!-- ADK agent results will be displayed here -->
+                </div>
+                
+                <div id="resultsSection" class="d-none">
+                    <div class="alert alert-success">
+                        <i class="fas fa-check-circle me-2"></i> {{ g.translations.proofread_complete|default('Proofreading complete! Download your corrected document below.') }}
+                    </div>
+                    
+                    <div class="d-flex justify-content-between mb-4">
+                        <a id="downloadBtn" href="#" class="btn btn-primary">
+                            <i class="fas fa-download me-2"></i>{{ g.translations.proofread_download|default('Download Corrected PDF') }}
+                        </a>
+                        <button id="newProofreadBtn" class="btn btn-outline-secondary">
+                            <i class="fas fa-redo me-2"></i>{{ g.translations.proofread_another|default('Proofread Another Document') }}
+                        </button>
+                    </div>
+                    
+                    <h5><i class="fas fa-list me-2"></i>{{ g.translations.proofread_summary|default('Summary of Corrections') }}</h5>
+                    <div class="corrections-list" id="correctionsList">
+                        <!-- Corrections will be added here dynamically -->
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block additional_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('fileInput');
+        const uploadSection = document.getElementById('uploadSection');
+        const processingSection = document.getElementById('processingSection');
+        const resultsSection = document.getElementById('resultsSection');
+        const fileName = document.getElementById('fileName');
+        const fileSize = document.getElementById('fileSize');
+        const statusMessage = document.getElementById('statusMessage');
+        const progressBar = document.getElementById('progressBar');
+        const downloadBtn = document.getElementById('downloadBtn');
+        const newProofreadBtn = document.getElementById('newProofreadBtn');
+        const correctionsList = document.getElementById('correctionsList');
+        const btnFileMode = document.getElementById('btnFileMode');
+        const btnTextMode = document.getElementById('btnTextMode');
+        const textSection = document.getElementById('textSection');
+        const textInput = document.getElementById('textInput');
+        const textSubmitBtn = document.getElementById('textSubmitBtn');
+        
+        // Setup file drop zone
+        dropZone.addEventListener('click', () => fileInput.click());
+        
+        // Handle file selection from file dialog
+        fileInput.addEventListener('change', handleFileSelect);
+        
+        // Handle drag and drop
+        dropZone.addEventListener('dragover', (e) => {
+            e.preventDefault();
+            dropZone.classList.add('border-primary');
+        });
+        
+        dropZone.addEventListener('dragleave', () => {
+            dropZone.classList.remove('border-primary');
+        });
+        
+        dropZone.addEventListener('drop', (e) => {
+            e.preventDefault();
+            dropZone.classList.remove('border-primary');
+            
+            if (e.dataTransfer.files.length) {
+                handleFile(e.dataTransfer.files[0]);
+            }
+        });
+        
+        // New proofread button
+        newProofreadBtn.addEventListener('click', () => {
+            fileInput.value = '';
+            uploadSection.classList.remove('d-none');
+            processingSection.classList.add('d-none');
+            resultsSection.classList.add('d-none');
+            correctionsList.innerHTML = '';
+        });
+        
+        // Mode toggle buttons
+        btnFileMode.addEventListener('click', () => {
+            uploadSection.classList.remove('d-none');
+            textSection.classList.add('d-none');
+            btnFileMode.classList.add('btn-primary');
+            btnFileMode.classList.remove('btn-outline-primary');
+            btnTextMode.classList.add('btn-outline-primary');
+            btnTextMode.classList.remove('btn-primary');
+        });
+        
+        btnTextMode.addEventListener('click', () => {
+            uploadSection.classList.add('d-none');
+            textSection.classList.remove('d-none');
+            btnTextMode.classList.add('btn-primary');
+            btnTextMode.classList.remove('btn-outline-primary');
+            btnFileMode.classList.add('btn-outline-primary');
+            btnFileMode.classList.remove('btn-primary');
+        });
+        
+        // Text submit button
+        textSubmitBtn.addEventListener('click', () => {
+            const text = textInput.value.trim();
+            if (text === '') {
+                alert(document.documentElement.lang === 'pl' ? 'Proszę wpisać tekst do sprawdzenia.' : 
+                     document.documentElement.lang === 'az' ? 'Zəhmət olmasa yoxlamaq üçün mətn daxil edin.' : 
+                     'Please enter text to proofread.');
+                return;
+            }
+            
+            // Show processing section
+            textSection.classList.add('d-none');
+            processingSection.classList.remove('d-none');
+            
+            // Simulate progress (in real app, you'd get this from the server)
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += 5;
+                if (progress <= 90) {
+                    progressBar.style.width = `${progress}%`;
+                    
+                    if (progress < 30) {
+                        statusMessage.textContent = document.documentElement.lang === 'pl' ? 'Analizowanie tekstu i identyfikowanie błędów...' : 
+                                                  document.documentElement.lang === 'az' ? 'Mətn təhlil edilir və səhvlər müəyyənləşdirilir...' : 
+                                                  'Analyzing text and identifying errors...';
+                    } else if (progress < 60) {
+                        statusMessage.textContent = document.documentElement.lang === 'pl' ? 'Dokonywanie poprawek gramatycznych i ortograficznych...' : 
+                                                  document.documentElement.lang === 'az' ? 'Qrammatika və orfoqrafiya düzəlişləri aparılır...' : 
+                                                  'Making grammar and spelling corrections...';
+                    } else {
+                        statusMessage.textContent = document.documentElement.lang === 'pl' ? 'Finalizowanie dokumentu i generowanie PDF...' : 
+                                                  document.documentElement.lang === 'az' ? 'Sənəd tamamlanır və PDF yaradılır...' : 
+                                                  'Finalizing document and generating PDF...';
+                    }
+                }
+            }, 300);
+            
+            // Send to server
+            fetch('/proofread/text', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify({ text })
+            })
+            .then(response => response.json().then(data => {
+                if (data.error) {
+                    throw new Error(data.error);
+                }
+                return data;
+            }))
+            .then(data => {
+                clearInterval(progressInterval);
+                progressBar.style.width = '100%';
+                
+                // Process completed
+                setTimeout(() => {
+                    processingSection.classList.add('d-none');
+                    resultsSection.classList.remove('d-none');
+                    
+                    // Set download link
+                    if (data.pdf_url) {
+                        downloadBtn.href = data.pdf_url;
+                    }
+                    
+                    // Display corrections
+                    if (data.corrections && data.corrections.length) {
+                        displayCorrections(data.corrections);
+                    } else {
+                        correctionsList.innerHTML = '<p class="text-center">' + 
+                            (document.documentElement.lang === 'pl' ? 'Nie są potrzebne żadne poprawki! Twój dokument jest bezbłędny.' : 
+                             document.documentElement.lang === 'az' ? 'Düzəlişlərə ehtiyac yoxdur! Sənədiniz səhvsizdir.' : 
+                             'No corrections needed! Your document is error-free.') + '</p>';
+                    }
+                }, 500);
+            })
+            .catch(error => {
+                clearInterval(progressInterval);
+                alert(error.message || (document.documentElement.lang === 'pl' ? 'Podczas przetwarzania dokumentu wystąpił błąd. Spróbuj ponownie.' : 
+                     document.documentElement.lang === 'az' ? 'Sənədinizi emal edərkən xəta baş verdi. Zəhmət olmasa yenidən cəhd edin.' : 
+                     'An error occurred while processing your document. Please try again.'));
+                console.error('Error:', error);
+                textSection.classList.remove('d-none');
+                processingSection.classList.add('d-none');
+            });
+        });
+        
+        function handleFileSelect(e) {
+            if (e.target.files.length) {
+                handleFile(e.target.files[0]);
+            }
+        }
+        
+        function handleFile(file) {
+            // Check file type
+            const validTypes = ['text/plain', 'application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+            if (!validTypes.includes(file.type)) {
+                alert(document.documentElement.lang === 'pl' ? 'Proszę przesłać prawidłowy plik dokumentu (TXT, DOCX, PDF)' : 
+                     document.documentElement.lang === 'az' ? 'Zəhmət olmasa etibarlı sənəd faylı yükləyin (TXT, DOCX, PDF)' : 
+                     'Please upload a valid document file (TXT, DOCX, PDF)');
+                return;
+            }
+            
+            // Check file size (10MB max)
+            if (file.size > 10 * 1024 * 1024) {
+                alert(document.documentElement.lang === 'pl' ? 'Rozmiar pliku przekracza limit 10 MB' : 
+                     document.documentElement.lang === 'az' ? 'Fayl ölçüsü 10MB limitini aşır' : 
+                     'File size exceeds 10MB limit');
+                return;
+            }
+            
+            // Update UI with file info
+            fileName.textContent = file.name;
+            fileSize.textContent = formatFileSize(file.size);
+            
+            // Show processing section
+            uploadSection.classList.add('d-none');
+            processingSection.classList.remove('d-none');
+            
+            // Create form data
+            const formData = new FormData();
+            formData.append('file', file);
+            
+            // Simulate progress (in real app, you'd get this from the server)
+            let progress = 0;
+            const progressInterval = setInterval(() => {
+                progress += 5;
+                if (progress <= 90) {
+                    progressBar.style.width = `${progress}%`;
+                    
+                    if (progress < 30) {
+                        statusMessage.textContent = document.documentElement.lang === 'pl' ? 'Analizowanie tekstu i identyfikowanie błędów...' : 
+                                                  document.documentElement.lang === 'az' ? 'Mətn təhlil edilir və səhvlər müəyyənləşdirilir...' : 
+                                                  'Analyzing text and identifying errors...';
+                    } else if (progress < 60) {
+                        statusMessage.textContent = document.documentElement.lang === 'pl' ? 'Dokonywanie poprawek gramatycznych i ortograficznych...' : 
+                                                  document.documentElement.lang === 'az' ? 'Qrammatika və orfoqrafiya düzəlişləri aparılır...' : 
+                                                  'Making grammar and spelling corrections...';
+                    } else {
+                        statusMessage.textContent = document.documentElement.lang === 'pl' ? 'Finalizowanie dokumentu i generowanie PDF...' : 
+                                                  document.documentElement.lang === 'az' ? 'Sənəd tamamlanır və PDF yaradılır...' : 
+                                                  'Finalizing document and generating PDF...';
+                    }
+                }
+            }, 300);
+            
+            // Send to server
+            fetch('/proofread/upload', {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => response.json())
+            .then(data => {
+                clearInterval(progressInterval);
+                progressBar.style.width = '100%';
+                
+                // Process completed
+                setTimeout(() => {
+                    processingSection.classList.add('d-none');
+                    resultsSection.classList.remove('d-none');
+                    
+                    // Set download link
+                    if (data.pdf_url) {
+                        downloadBtn.href = data.pdf_url;
+                    }
+                    
+                    // Display corrections
+                    if (data.corrections && data.corrections.length) {
+                        displayCorrections(data.corrections);
+                    } else {
+                        correctionsList.innerHTML = '<p class="text-center">' + 
+                            (document.documentElement.lang === 'pl' ? 'Nie są potrzebne żadne poprawki! Twój dokument jest bezbłędny.' : 
+                             document.documentElement.lang === 'az' ? 'Düzəlişlərə ehtiyac yoxdur! Sənədiniz səhvsizdir.' : 
+                             'No corrections needed! Your document is error-free.') + '</p>';
+                    }
+                }, 500);
+            })
+            .catch(error => {
+                clearInterval(progressInterval);
+                alert(document.documentElement.lang === 'pl' ? 'Podczas przetwarzania dokumentu wystąpił błąd. Spróbuj ponownie.' : 
+                     document.documentElement.lang === 'az' ? 'Sənədinizi emal edərkən xəta baş verdi. Zəhmət olmasa yenidən cəhd edin.' : 
+                     'An error occurred while processing your document. Please try again.');
+                console.error('Error:', error);
+                uploadSection.classList.remove('d-none');
+                processingSection.classList.add('d-none');
+            });
+        }
+        
+        function displayCorrections(corrections) {
+            correctionsList.innerHTML = '';
+            
+            corrections.forEach(correction => {
+                const item = document.createElement('div');
+                item.className = 'correction-item';
+                item.innerHTML = `
+                    <div>
+                        <span class="original-text">${correction.original}</span> → 
+                        <span class="corrected-text">${correction.corrected}</span>
+                    </div>
+                    <div class="explanation">${correction.explanation}</div>
+                `;
+                correctionsList.appendChild(item);
+            });
+        }
+        
+        function formatFileSize(bytes) {
+            if (bytes < 1024) return bytes + ' bytes';
+            else if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+            else return (bytes / 1048576).toFixed(1) + ' MB';
+        }
+    });
+</script>
+{% endblock %}

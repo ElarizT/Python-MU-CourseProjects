@@ -1,0 +1,255 @@
+/* Animation Effects for LightYearAI Chat Interface */
+
+/* Fade-in animation for messages */
+@keyframes fadeIn {
+    from {
+        opacity: 0;
+        transform: translateY(10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.message {
+    animation: fadeIn 0.3s ease forwards;
+}
+
+/* Pulse animation for active elements */
+@keyframes pulse {
+    0% {
+        box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.4);
+    }
+    70% {
+        box-shadow: 0 0 0 10px rgba(99, 102, 241, 0);
+    }
+    100% {
+        box-shadow: 0 0 0 0 rgba(99, 102, 241, 0);
+    }
+}
+
+.pulse-effect {
+    animation: pulse 2s infinite;
+}
+
+/* Loading spinner animation */
+@keyframes spin {
+    0% { transform: rotate(0deg); }
+    100% { transform: rotate(360deg); }
+}
+
+.loading-spinner {
+    width: 20px;
+    height: 20px;
+    border: 2px solid rgba(255, 255, 255, 0.3);
+    border-radius: 50%;
+    border-top-color: #6366f1;
+    animation: spin 1s infinite linear;
+    display: inline-block;
+}
+
+/* Shimmer effect for loading state */
+@keyframes shimmer {
+    0% {
+        background-position: -200% 0;
+    }
+    100% {
+        background-position: 200% 0;
+    }
+}
+
+.shimmer-effect {
+    background: linear-gradient(90deg, 
+        rgba(255, 255, 255, 0.1) 0%, 
+        rgba(255, 255, 255, 0.2) 50%, 
+        rgba(255, 255, 255, 0.1) 100%);
+    background-size: 200% 100%;
+    animation: shimmer 1.5s infinite;
+}
+
+/* Typing animation enhancement */
+.typing-indicator {
+    display: inline-flex;
+    align-items: center;
+}
+
+.typing-indicator span {
+    display: inline-block;
+    width: 8px;
+    height: 8px;
+    margin-right: 3px;
+    background-color: rgba(255, 255, 255, 0.6);
+    border-radius: 50%;
+    animation: typingBounce 1.4s infinite ease-in-out both;
+}
+
+.typing-indicator span:nth-child(1) {
+    animation-delay: -0.32s;
+}
+
+.typing-indicator span:nth-child(2) {
+    animation-delay: -0.16s;
+}
+
+@keyframes typingBounce {
+    0%, 80%, 100% { 
+        transform: scale(0.6);
+        opacity: 0.4;
+    }
+    40% { 
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+/* Reveal animation for command suggestions */
+@keyframes revealDown {
+    from {
+        opacity: 0;
+        transform: translateY(-10px);
+    }
+    to {
+        opacity: 1;
+        transform: translateY(0);
+    }
+}
+
+.command-reveal {
+    animation: revealDown 0.2s ease forwards;
+}
+
+/* Hover effects for interactive elements */
+.hover-float {
+    transition: transform 0.3s ease;
+}
+
+.hover-float:hover {
+    transform: translateY(-3px);
+}
+
+/* Gradient button animation */
+@keyframes gradientShift {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.gradient-button {
+    background: linear-gradient(90deg, #6366f1, #38bdf8, #8b5cf6);
+    background-size: 200% 200%;
+    animation: gradientShift 3s ease infinite;
+}
+
+/* Chat bubble pop-in effect */
+@keyframes popIn {
+    0% {
+        transform: scale(0.9);
+        opacity: 0;
+    }
+    70% {
+        transform: scale(1.05);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.pop-in {
+    animation: popIn 0.3s forwards;
+}
+
+/* Success feedback animation */
+@keyframes checkmark {
+    0% {
+        transform: scale(0);
+        opacity: 0;
+    }
+    50% {
+        transform: scale(1.2);
+    }
+    100% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+
+.success-checkmark {
+    color: #4ade80;
+    animation: checkmark 0.5s ease forwards;
+}
+
+/* Sidebar toggle animation */
+@keyframes slideIn {
+    from {
+        transform: translateX(-100%);
+    }
+    to {
+        transform: translateX(0);
+    }
+}
+
+.sidebar-slide-in {
+    animation: slideIn 0.3s ease forwards;
+}
+
+/* Focus highlight effect */
+.focus-highlight {
+    transition: box-shadow 0.3s ease;
+}
+
+.focus-highlight:focus {
+    box-shadow: 0 0 0 3px rgba(99, 102, 241, 0.3);
+}
+
+/* Wave animation for active recording or processing */
+@keyframes wave {
+    0% {
+        transform: scaleY(0.8);
+    }
+    50% {
+        transform: scaleY(1.2);
+    }
+    100% {
+        transform: scaleY(0.8);
+    }
+}
+
+.wave-bars {
+    display: flex;
+    align-items: center;
+    height: 20px;
+}
+
+.wave-bars span {
+    display: inline-block;
+    width: 3px;
+    height: 100%;
+    margin: 0 2px;
+    background-color: rgba(99, 102, 241, 0.8);
+    border-radius: 1px;
+    animation: wave 1s ease infinite;
+}
+
+.wave-bars span:nth-child(2) {
+    animation-delay: 0.1s;
+}
+
+.wave-bars span:nth-child(3) {
+    animation-delay: 0.2s;
+}
+
+.wave-bars span:nth-child(4) {
+    animation-delay: 0.3s;
+}
+
+.wave-bars span:nth-child(5) {
+    animation-delay: 0.4s;
+}

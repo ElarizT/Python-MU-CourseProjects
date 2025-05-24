@@ -1,0 +1,447 @@
+{% extends 'base.html' %}
+
+{% block title %}Presentation Builder - LightYearAI{% endblock %}
+
+{% block additional_styles %}
+.upload-container {
+    border: 2px dashed #ccc;
+    border-radius: 8px;
+    padding: 40px 20px;
+    text-align: center;
+    margin-bottom: 20px;
+    background-color: #f9f9f9;
+    transition: all 0.3s ease;
+    cursor: pointer;
+}
+
+.upload-container:hover, .upload-container.dragover {
+    border-color: #007bff;
+    background-color: #f0f7ff;
+}
+
+.upload-icon {
+    font-size: 48px;
+    color: #aaa;
+    margin-bottom: 15px;
+}
+
+.tab-content {
+    padding-top: 20px;
+}
+
+.presentation-options {
+    background-color: #f5f5f5;
+    border-radius: 8px;
+    padding: 20px;
+    margin-top: 20px;
+}
+
+.loading-spinner {
+    display: none;
+    text-align: center;
+    margin: 30px 0;
+}
+
+.loading-spinner .spinner-border {
+    width: 3rem;
+    height: 3rem;
+}
+
+.result-container {
+    display: none;
+    margin-top: 30px;
+    padding: 20px;
+    border-radius: 8px;
+    background-color: #e8f5e9;
+    text-align: center;
+}
+
+.download-btn {
+    margin-top: 15px;
+}
+
+.error-container {
+    display: none;
+    margin-top: 20px;
+    padding: 15px;
+    border-radius: 8px;
+    background-color: #ffebee;
+    color: #d32f2f;
+}
+{% endblock %}
+
+{% block content %}
+<div class="container">
+    <div class="row justify-content-center">
+        <div class="col-md-10">
+            <h1 class="mb-4 text-center">Presentation Builder</h1>
+            <p class="lead text-center mb-5">Create professional presentations instantly from your documents or text</p>
+            
+            <!-- Input Method Tabs -->
+            <ul class="nav nav-tabs nav-justified mb-4" id="inputMethodTabs" role="tablist">
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link active" id="upload-tab" data-bs-toggle="tab" data-bs-target="#upload-content" type="button" role="tab" aria-controls="upload-content" aria-selected="true">
+                        <i class="fas fa-file-upload me-2"></i>Upload File
+                    </button>
+                </li>
+                <li class="nav-item" role="presentation">
+                    <button class="nav-link" id="text-tab" data-bs-toggle="tab" data-bs-target="#text-content" type="button" role="tab" aria-controls="text-content" aria-selected="false">
+                        <i class="fas fa-align-left me-2"></i>Enter Text
+                    </button>
+                </li>
+            </ul>
+            
+            <!-- Tab Content -->
+            <div class="tab-content" id="inputMethodTabsContent">
+                <!-- File Upload Tab -->
+                <div class="tab-pane fade show active" id="upload-content" role="tabpanel" aria-labelledby="upload-tab">
+                    <form id="file-upload-form">
+                        <div class="upload-container" id="drop-area">
+                            <i class="fas fa-cloud-upload-alt upload-icon"></i>
+                            <h4>Drop your file here or click to browse</h4>
+                            <p class="text-muted">Supported formats: TXT, DOCX, PDF (up to 10MB)</p>
+                            <input type="file" id="file-input" name="file" accept=".txt,.docx,.pdf" class="d-none">
+                            <button type="button" id="browse-button" class="btn btn-primary mt-3">Browse Files</button>
+                        </div>
+                        <div id="file-info" class="alert alert-success d-none">
+                            <i class="fas fa-check-circle me-2"></i>
+                            <span id="selected-filename">No file selected</span>
+                        </div>
+                        
+                        <!-- Presentation Options for File Upload -->
+                        <div class="presentation-options">
+                            <h5 class="mb-3">Presentation Options</h5>
+                            <div class="mb-3">
+                                <label for="presentation-title-file" class="form-label">Presentation Title</label>
+                                <input type="text" class="form-control" id="presentation-title-file" name="title" placeholder="Enter a title for your presentation">
+                            </div>
+                            <div class="mb-3">
+                                <label for="presentation-tone-file" class="form-label">Tone</label>
+                                <select class="form-select" id="presentation-tone-file" name="tone">
+                                    <option value="professional">Professional</option>
+                                    <option value="academic">Academic</option>
+                                    <option value="casual">Casual</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-glow btn-lg w-100 mt-3">Generate Presentation</button>
+                        </div>
+                    </form>
+                </div>
+                
+                <!-- Text Input Tab -->
+                <div class="tab-pane fade" id="text-content" role="tabpanel" aria-labelledby="text-tab">
+                    <form id="text-input-form">
+                        <div class="mb-4">
+                            <label for="text-area" class="form-label">Enter your content</label>
+                            <textarea class="form-control" id="text-area" name="text" rows="10" placeholder="Paste or type your text content here..."></textarea>
+                        </div>
+                        
+                        <!-- Presentation Options for Text Input -->
+                        <div class="presentation-options">
+                            <h5 class="mb-3">Presentation Options</h5>
+                            <div class="mb-3">
+                                <label for="presentation-title-text" class="form-label">Presentation Title</label>
+                                <input type="text" class="form-control" id="presentation-title-text" name="title" placeholder="Enter a title for your presentation">
+                            </div>
+                            <div class="mb-3">
+                                <label for="presentation-tone-text" class="form-label">Tone</label>
+                                <select class="form-select" id="presentation-tone-text" name="tone">
+                                    <option value="professional">Professional</option>
+                                    <option value="academic">Academic</option>
+                                    <option value="casual">Casual</option>
+                                </select>
+                            </div>
+                            <button type="submit" class="btn btn-glow btn-lg w-100 mt-3">Generate Presentation</button>
+                        </div>
+                    </form>
+                </div>
+            </div>
+            
+            <!-- Loading Spinner -->
+            <div class="loading-spinner" id="loading-spinner">
+                <div class="spinner-border text-primary" role="status">
+                    <span class="visually-hidden">Loading...</span>
+                </div>
+                <h5 class="mt-3">Generating your presentation...</h5>
+                <p class="text-muted">This may take a few moments</p>
+            </div>
+            
+            <!-- Result Container -->
+            <div class="result-container" id="result-container">
+                <i class="fas fa-check-circle fa-3x text-success mb-3"></i>
+                <h4 class="mb-3">Your presentation is ready!</h4>
+                <p>We've analyzed your content and created a professional presentation.</p>
+                
+                <div class="alert alert-info mb-3">
+                    <i class="fas fa-info-circle me-2"></i>
+                    <strong>Two ways to view your presentation:</strong>
+                    <ol class="mt-2 mb-0 text-start">
+                        <li><strong>View in Enhanced Browser</strong>: Our custom viewer with animated transitions, themes and interactive controls</li>
+                        <li><strong>Download PowerPoint File</strong>: Standard PowerPoint file for editing in Microsoft PowerPoint</li>
+                    </ol>
+                </div>
+                
+                <div class="d-flex flex-column flex-md-row justify-content-center mt-3">
+                    <a href="#" id="view-link" class="btn btn-primary btn-lg mb-2 mb-md-0 me-md-2">
+                        <i class="fas fa-magic me-2"></i>View in Enhanced Browser
+                    </a>
+                    <a href="#" id="download-link" class="btn btn-outline-success btn-lg">
+                        <i class="fas fa-download me-2"></i>Download PowerPoint File
+                    </a>
+                </div>
+                <button id="create-another-btn" class="btn btn-outline-primary mt-3">Create Another Presentation</button>
+            </div>
+            
+            <!-- Error Container -->
+            <div class="error-container" id="error-container">
+                <i class="fas fa-exclamation-triangle me-2"></i>
+                <span id="error-message">An error occurred while generating your presentation.</span>
+                <button id="try-again-btn" class="btn btn-outline-danger btn-sm ms-3">Try Again</button>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block additional_scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // File upload functionality
+        const dropArea = document.getElementById('drop-area');
+        const fileInput = document.getElementById('file-input');
+        const browseButton = document.getElementById('browse-button');
+        const fileInfo = document.getElementById('file-info');
+        const selectedFilename = document.getElementById('selected-filename');
+        const fileUploadForm = document.getElementById('file-upload-form');
+        
+        // Text input form
+        const textInputForm = document.getElementById('text-input-form');
+        
+        // Status elements
+        const loadingSpinner = document.getElementById('loading-spinner');
+        const resultContainer = document.getElementById('result-container');
+        const errorContainer = document.getElementById('error-container');
+        const errorMessage = document.getElementById('error-message');
+        const downloadLink = document.getElementById('download-link');
+        const createAnotherBtn = document.getElementById('create-another-btn');
+        const tryAgainBtn = document.getElementById('try-again-btn');
+        
+        // File input click handler
+        browseButton.addEventListener('click', () => {
+            fileInput.click();
+        });
+        
+        // File selection handler
+        fileInput.addEventListener('change', () => {
+            if (fileInput.files.length > 0) {
+                const file = fileInput.files[0];
+                if (validateFile(file)) {
+                    showFileInfo(file);
+                } else {
+                    resetFileInput();
+                    showError('Invalid file type. Please select a TXT, DOCX, or PDF file under 10MB.');
+                }
+            }
+        });
+        
+        // Drag and drop handlers
+        ['dragenter', 'dragover', 'dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, preventDefaults, false);
+        });
+        
+        function preventDefaults(e) {
+            e.preventDefault();
+            e.stopPropagation();
+        }
+        
+        ['dragenter', 'dragover'].forEach(eventName => {
+            dropArea.addEventListener(eventName, () => {
+                dropArea.classList.add('dragover');
+            }, false);
+        });
+        
+        ['dragleave', 'drop'].forEach(eventName => {
+            dropArea.addEventListener(eventName, () => {
+                dropArea.classList.remove('dragover');
+            }, false);
+        });
+        
+        dropArea.addEventListener('drop', handleDrop, false);
+        
+        function handleDrop(e) {
+            const dt = e.dataTransfer;
+            const file = dt.files[0];
+            
+            if (validateFile(file)) {
+                fileInput.files = dt.files;
+                showFileInfo(file);
+            } else {
+                showError('Invalid file type. Please select a TXT, DOCX, or PDF file under 10MB.');
+            }
+        }
+        
+        // File validation
+        function validateFile(file) {
+            const validTypes = ['text/plain', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document', 'application/pdf'];
+            const maxSize = 10 * 1024 * 1024; // 10MB
+            
+            if (!validTypes.includes(file.type)) {
+                return false;
+            }
+            
+            if (file.size > maxSize) {
+                return false;
+            }
+            
+            return true;
+        }
+        
+        // Show selected file information
+        function showFileInfo(file) {
+            selectedFilename.textContent = file.name;
+            fileInfo.classList.remove('d-none');
+        }
+        
+        // Reset file input
+        function resetFileInput() {
+            fileInput.value = '';
+            fileInfo.classList.add('d-none');
+        }
+        
+        // File upload form submission
+        fileUploadForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            if (fileInput.files.length === 0) {
+                showError('Please select a file to upload.');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('file', fileInput.files[0]);
+            formData.append('title', document.getElementById('presentation-title-file').value);
+            formData.append('tone', document.getElementById('presentation-tone-file').value);
+            
+            submitFormData('/api/create-presentation', formData);
+        });
+        
+        // Text input form submission
+        textInputForm.addEventListener('submit', function(e) {
+            e.preventDefault();
+            
+            const textContent = document.getElementById('text-area').value.trim();
+            
+            if (!textContent) {
+                showError('Please enter text content for your presentation.');
+                return;
+            }
+            
+            const formData = new FormData();
+            formData.append('text', textContent);
+            formData.append('title', document.getElementById('presentation-title-text').value);
+            formData.append('tone', document.getElementById('presentation-tone-text').value);
+            
+            submitFormData('/api/create-presentation', formData);
+        });
+          // Submit form data to the server
+        function submitFormData(url, formData) {
+            // Show loading spinner
+            showLoading();
+            
+            console.log("Submitting presentation form data to:", url);
+            
+            // Debug form data
+            console.log("Form data entries:");
+            for (let pair of formData.entries()) {
+                console.log(pair[0] + ': ' + (pair[1] instanceof File ? 
+                    pair[1].name + ' (' + pair[1].size + ' bytes)' : 
+                    (typeof pair[1] === 'string' && pair[1].length > 50 ? 
+                        pair[1].substring(0, 50) + '...' : pair[1])));
+            }
+            
+            fetch(url, {
+                method: 'POST',
+                body: formData
+            })
+            .then(response => {
+                console.log("Presentation API response status:", response.status);
+                if (!response.ok) {
+                    return response.json().then(data => {
+                        console.error("Error response:", data);
+                        throw new Error(data.error || `Server error (${response.status}): ${response.statusText}`);
+                    });
+                }
+                return response.json();
+            })
+            .then(data => {
+                console.log("Presentation API success response:", data);
+                
+                // Check for both possible URL formats
+                const downloadUrl = data.download_url || data.presentation_url;
+                
+                if (data.success && downloadUrl) {
+                    // Show success and set download and view links
+                    console.log("Setting download URL:", downloadUrl);
+                    downloadLink.href = downloadUrl;
+                    
+                    // Set up the view link if available
+                    const viewLink = document.getElementById('view-link');
+                    if (data.view_url) {
+                        console.log("Setting view URL:", data.view_url);
+                        viewLink.href = data.view_url;
+                        viewLink.style.display = 'inline-block';
+                    } else {
+                        console.log("No view URL available");
+                        viewLink.style.display = 'none';
+                    }
+                    
+                    showResult();
+                } else {
+                    console.error("Missing download URL in successful response:", data);
+                    throw new Error(data.error || 'No download URL provided in the response.');
+                }
+            })
+            .catch(error => {
+                console.error("Presentation generation error:", error);
+                showError(error.message || 'An error occurred while generating the presentation.');
+            });
+        }
+        
+        // UI state functions
+        function showLoading() {
+            hideAllStates();
+            loadingSpinner.style.display = 'block';
+        }
+        
+        function showResult() {
+            hideAllStates();
+            resultContainer.style.display = 'block';
+        }
+        
+        function showError(message) {
+            errorContainer.style.display = 'block';
+            errorMessage.textContent = message;
+        }
+        
+        function hideAllStates() {
+            loadingSpinner.style.display = 'none';
+            resultContainer.style.display = 'none';
+            errorContainer.style.display = 'none';
+        }
+        
+        // Reset UI and create another presentation
+        createAnotherBtn.addEventListener('click', function() {
+            hideAllStates();
+            resetFileInput();
+            document.getElementById('text-area').value = '';
+            document.getElementById('presentation-title-file').value = '';
+            document.getElementById('presentation-title-text').value = '';
+        });
+        
+        // Try again after an error
+        tryAgainBtn.addEventListener('click', function() {
+            hideAllStates();
+        });
+    });
+</script>
+{% endblock %}

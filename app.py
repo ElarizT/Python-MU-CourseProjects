@@ -1,0 +1,5576 @@
+import os
+import json
+import uuid
+import tempfile
+import sys
+import re
+import time
+import random
+import traceback
+from datetime import datetime, timedelta
+from flask import Flask, render_template, request, jsonify, send_file, redirect, url_for, session, g, flash, make_response
+from file_optimizer import convert_to_serializable, read_csv_optimized
+from json_utils import EnhancedJSONEncoder, convert_to_json_serializable
+
+# Define a safer jsonify function that handles non-serializable types
+def safe_jsonify(data):
+    """
+    A safer version of jsonify that handles non-JSON-serializable types like NumPy arrays/values.
+    Falls back to string representation for truly unserializable objects.
+    """
+    try:
+        # First try normal jsonify
+        return jsonify(data)
+    except (TypeError, ValueError, OverflowError) as e:
+        # On serialization error, try to convert the data
+        try:
+            # convert_to_json_serializable is already imported at module level
+            serializable_data = convert_to_json_serializable(data)
+            return jsonify(serializable_data)
+        except Exception as e2:
+            # If all else fails, return an error message
+            print(f"JSON Serialization Error: {e} -> {e2}")
+            return jsonify({
+                'error': 'Failed to serialize response',
+                'details': str(e)
+            }), 500
+from werkzeug.utils import secure_filename
+from dotenv import load_dotenv
+import google.generativeai as genai
+from PyPDF2 import PdfReader, PdfWriter
+from reportlab.pdfgen import canvas
+from reportlab.lib.pagesizes import letter
+import requests
+import firebase_admin
+from firebase_admin import credentials, auth, firestore
+from subscription_utils import (
+    track_token_usage_for_api_call, 
+    check_user_token_limit,
+    get_user_subscription,
+    create_stripe_checkout_session,
+    handle_stripe_webhook,
+    get_admin_dashboard_data,
+    update_user_limit,
+    reset_all_daily_token_usage,
+    get_user_daily_token_usage
+)
+import shutil
+import stripe
+from agents import (
+    initialize_agent, 
+    execute_agent_with_plan,
+    get_agent, 
+    proofread_and_summarize_plan,
+    study_assistant_plan
+)
+from agents.utils import track_agent_usage
+from excel_generator import generate_excel_from_prompt
+from agents.excel_crew import generate_excel_with_crew
+from presentation_builder import (
+    generate_presentation_from_file,
+    generate_presentation_from_text
+)
+from llm_presentation_generator import generate_presentation_from_topic
+# Import referral utilities
+from referral_utils import (
+    get_referral_code, 
+    get_referral_stats, 
+    track_referral,
+    complete_referral
+)
+
+# Import Firebase diagnostics
+from firebase_diagnostics import register_firebase_diagnostics
+
+# Get environment variables
+from referral_utils import check_expired_referral_plans
+
+# Load environment variables
+load_dotenv()
+
+# Configure Google Generative AI
+GOOGLE_API_KEY = os.getenv("GOOGLE_API_KEY")
+genai.configure(api_key=GOOGLE_API_KEY)
+
+# Token usage limits
+FREE_PLAN_DAILY_LIMIT = 25000  # 25K tokens per day for free users
+PAID_PLAN_DAILY_LIMIT = 100000  # 100K tokens per day for premium users
+TOTAL_MONTHLY_BUDGET_TOKENS = int(os.getenv("MONTHLY_TOKEN_BUDGET", "1000000"))  # Default 1M tokens monthly budget
+
+# Print current directory and files for debugging
+print("Current working directory:", os.getcwd())
+print("Directory contents:", os.listdir())
+if (os.path.exists('templates')):
+    print("Templates directory contents:", os.listdir('templates'))
+else:
+    print("Templates directory not found in current directory")
+
+# Try to find template directory
+template_dir = None
+possible_template_dirs = [
+    os.path.join(os.path.dirname(os.path.abspath(__file__)), 'templates'),
+    os.path.join(os.getcwd(), 'templates'),
+    '/opt/render/project/src/templates',
+]
+
+for dir_path in possible_template_dirs:
+    if (os.path.isdir(dir_path)):
+        template_dir = dir_path
+        print(f"Found template directory at: {template_dir}")
+        break
+
+if (not template_dir):
+    print("Could not find templates directory!")
+    # As a fallback, use the first option anyway
+    template_dir = possible_template_dirs[0]
+
+# Initialize Flask app with explicit static and template folders
+app = Flask(__name__, 
+            template_folder=template_dir,
+            static_folder=os.path.join(os.path.dirname(os.path.abspath(__file__)), 'static'))
+
+# Set a secret key for the session
+secret_key = os.getenv("FLASK_SECRET_KEY") or os.getenv("SECRET_KEY")
+if not secret_key:
+    # Generate a random secret key if none is provided
+    import secrets
+    secret_key = secrets.token_hex(24)  # 48 character random hex string
+    print("Warning: Using a randomly generated secret key. Sessions will not persist between restarts.")
+else:
+    print("Using provided secret key from environment variables.")
+
+app.secret_key = secret_key
+
+# Configure custom JSON encoder to handle NumPy types and other non-standard JSON serializable types
+try:
+    from json_utils import EnhancedJSONEncoder
+    app.json_encoder = EnhancedJSONEncoder
+    print("[JSON CONFIG] Using enhanced JSON encoder for improved serialization")
+except ImportError:
+    print("[JSON CONFIG] Warning: Could not load enhanced JSON encoder. Some data types may not serialize properly.")
+
+# Add a context processor to provide the current datetime to all templates
+@app.context_processor
+def inject_now():
+    return {'now': datetime.now()}
+
+# Set session lifetime to 30 days
+app.permanent_session_lifetime = timedelta(days=30)
+
+# Register Firebase diagnostics
+register_firebase_diagnostics(app)
+
+# Debug session configuration
+print(f"[SESSION CONFIG] Secret key set: {'Yes' if app.secret_key else 'No'}")
+print(f"[SESSION CONFIG] Session interface: {app.session_interface.__class__.__name__}")
+print(f"[SESSION CONFIG] Session lifetime: {app.permanent_session_lifetime.total_seconds() / 86400} days")
+
+# Initialize Firebase Admin SDK (only once)
+if (not firebase_admin._apps):
+    try:
+        print("\n" + "="*30 + " FIREBASE INITIALIZATION " + "="*30)
+        # First, try to get credentials from environment variables
+        firebase_credentials_base64 = os.environ.get('FIREBASE_CREDENTIALS_BASE64')
+        storage_bucket = os.environ.get('FIREBASE_STORAGE_BUCKET', 'lightyearai-app.firebasestorage.app')
+        
+        # Use the bucket name as-is instead of trying to convert it
+        print(f"Using Firebase Storage bucket: {storage_bucket}")
+        
+        if firebase_credentials_base64:
+            print("Found FIREBASE_CREDENTIALS_BASE64 environment variable")
+            # Decode base64 credentials and save to a temporary file
+            import base64
+            import tempfile
+            
+            # Decode the base64 string to JSON content
+            try:
+                print(f"Decoding base64 credentials (first 20 chars: {firebase_credentials_base64[:20]}...)")
+                json_content = base64.b64decode(firebase_credentials_base64).decode('utf-8')
+                
+                # Debug: print part of decoded content to verify it's valid JSON
+                print(f"Decoded credentials JSON starts with: {json_content[:50]}...")
+                
+                # Write the JSON to a temporary file
+                temp_cred_file = tempfile.NamedTemporaryFile(delete=False, mode='w', suffix='.json')
+                temp_cred_file.write(json_content)
+                temp_cred_file.close()
+                
+                print(f"Wrote credentials to temporary file: {temp_cred_file.name}")
+                
+                # Initialize with the temporary credentials file
+                cred = credentials.Certificate(temp_cred_file.name)
+                firebase_admin.initialize_app(cred, {
+                    'storageBucket': storage_bucket,
+                    'databaseURL': os.environ.get('FIREBASE_DATABASE_URL', 'https://lightyearai-app-default-rtdb.europe-west1.firebasedatabase.app')
+                })
+                print(f"Firebase initialized with credentials from environment variable")
+                
+                # Test auth API with a simple call
+                try:
+                    test_user = auth.list_users(max_results=1)
+                    print(f"Successfully verified Firebase Admin SDK by querying users")
+                except Exception as auth_test_error:
+                    print(f"WARNING: Firebase initialized but auth test failed: {auth_test_error}")
+            except Exception as e:
+                print(f"Error decoding Firebase credentials from environment: {e}")
+                raise        
+        else:
+            # Fallback to credential file
+            cred_file = os.environ.get('GOOGLE_APPLICATION_CREDENTIALS') or 'lightyearai-app-firebase-adminsdk-fbsvc-a1c778d686.json'
+        
+            # Check if the file exists
+            if not os.path.exists(cred_file):
+                print(f"Warning: Credentials file not found at: {cred_file}")
+                
+                # Try to find it in the current directory as a fallback
+                base_filename = os.path.basename(cred_file)
+                if os.path.exists(base_filename):
+                    cred_file = base_filename
+                    print(f"Found credentials file in current directory: {cred_file}")
+                else:
+                    print(f"Searching for service account JSON files in current directory...")
+                    json_files = [f for f in os.listdir('.') if f.endswith('.json') and 'firebase' in f.lower()]
+                    if json_files:
+                        cred_file = json_files[0]
+                        print(f"Using alternative credentials file: {cred_file}")
+            
+            print(f"Using credentials file: {cred_file}")
+            cred = credentials.Certificate(cred_file)
+            firebase_admin.initialize_app(cred, {
+                'storageBucket': storage_bucket,
+                'databaseURL': os.environ.get('FIREBASE_DATABASE_URL', 'https://lightyearai-app-default-rtdb.europe-west1.firebasedatabase.app')
+            })
+            print(f"Firebase initialized with credentials file: {cred_file}")
+            
+        # Get Firestore client
+        db = firestore.client()
+        print("Firestore client initialized successfully")
+        print("="*80 + "\n")
+    except Exception as e:
+        print(f"ERROR initializing Firebase: {e}")
+        import traceback
+        print(f"Traceback: {traceback.format_exc()}")
+        # For development purposes, create a fallback mock implementation
+        # In production, this should raise an error
+        if os.environ.get('FLASK_ENV') == 'development':
+            print("Running in development mode. Creating mock Firebase implementation.")
+            from firebase_utils import MockDatabase, MockFirestore
+            db = MockDatabase()
+        else:
+            print("*** CRITICAL ERROR: Firebase initialization failed in production mode! ***")
+            raise
+
+# Helper: Check if user is authenticated
+from functools import wraps
+
+def login_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        print(f"[LOGIN_REQUIRED] Checking session for route: {request.path}")
+        print(f"[LOGIN_REQUIRED] Session keys present: {list(session.keys())}")
+        print(f"[LOGIN_REQUIRED] Session cookie present: {'session' in request.cookies}")
+        
+        try:
+            # First, check if user_id is in session
+            if 'user_id' not in session or not session.get('user_id'):
+                print(f"[LOGIN_REQUIRED] No user_id in session, redirecting to login")
+                
+                # Store the requested URL for redirecting after login
+                next_url = request.url
+                # Redirect to login page with the next parameter
+                return redirect(url_for('login', next=next_url))
+            
+            # Then perform full session validation
+            if not validate_session():
+                # Store the requested URL for redirecting after login
+                next_url = request.url
+                print(f"[LOGIN_REQUIRED] Session validation failed, redirecting to login with next={next_url}")
+                # Clear any invalid session data
+                session.clear()
+                # Redirect to login page with the next parameter
+                return redirect(url_for('login', next=next_url))
+                
+            print(f"[LOGIN_REQUIRED] Session is valid for user {session.get('user_id')}")
+            return f(*args, **kwargs)
+        except Exception as e:
+            print(f"[LOGIN_REQUIRED] Unexpected error during authentication: {e}")
+            import traceback
+            print(f"[LOGIN_REQUIRED] Error traceback: {traceback.format_exc()}")
+            
+            session.clear()
+            flash('An authentication error occurred. Please log in again.', 'danger')
+            return redirect(url_for('login', next=request.url))
+    return decorated_function
+
+# Helper: Check if user is an admin
+def admin_required(f):
+    @wraps(f)
+    def decorated_function(*args, **kwargs):
+        if ('user_id' not in session):
+            return redirect(url_for('login'))
+        
+        user_id = session['user_id']
+        user_doc = db.collection('users').document(user_id).get()
+        
+        if (not user_doc.exists or not user_doc.to_dict().get('is_admin', False)):
+            flash('You do not have permission to access this page.', 'danger')
+            return redirect(url_for('index'))
+            
+        return f(*args, **kwargs)
+    return decorated_function
+
+# Helper: Validate session state and handle refresh if needed
+def validate_session():
+    """
+    Validates the current session and handles any issues.
+    Returns True if the session is valid, False otherwise.
+    """
+    # Log detailed session state for debugging
+    print(f"[SESSION VALIDATE] Session keys: {list(session.keys())}")
+    print(f"[SESSION VALIDATE] User ID: {session.get('user_id', 'None')}")
+    print(f"[SESSION VALIDATE] Explicitly logged out: {session.get('explicitly_logged_out', False)}")
+    
+    # Check if user has explicitly logged out
+    if session.get('explicitly_logged_out'):
+        print(f"[SESSION VALIDATE] User explicitly logged out")
+        return False
+    
+    # First check if user_id exists and is not empty
+    if 'user_id' not in session or not session.get('user_id'):
+        print(f"[SESSION VALIDATE] No valid user_id in session")
+        return False
+        
+    # Check for session age (optional security feature)
+    current_time = time.time()
+    login_time = session.get('login_time', 0)
+    
+    # Force re-login after 30 days (2592000 seconds) of inactivity
+    if current_time - login_time > 2592000:
+        print(f"[SESSION VALIDATE] Session too old, clearing")
+        session.clear()
+        return False
+    
+    # Check if the user still exists in Firebase (optional verification)
+    try:
+        uid = session.get('user_id')
+        if uid:
+            # Only verify with Firebase occasionally to reduce load
+            # Increased verification frequency to 25% during debug
+            should_verify = random.random() < 0.25  # 25% chance to verify while debugging
+            
+            if should_verify:
+                try:
+                    from firebase_admin import auth
+                    auth.get_user(uid)  # Will raise exception if user doesn't exist
+                    
+                    # Update the login time after verification
+                    session['login_time'] = current_time
+                    session.modified = True
+                    print(f"[SESSION VALIDATE] Firebase verification successful for {uid}")
+                except Exception as firebase_error:
+                    print(f"[SESSION VALIDATE] Firebase verification failed for {uid}: {firebase_error}")
+                    session.clear()
+                    return False
+    except Exception as e:
+        print(f"[SESSION VALIDATE] Session validation error: {e}")
+        session.clear()
+        return False
+        
+    # Update the login time if we're near the threshold
+    if current_time - login_time > 3600:  # Update every hour
+        print(f"[SESSION VALIDATE] Updating login time, old: {login_time}, new: {current_time}")
+        session['login_time'] = current_time
+        session.modified = True
+        # Double check that the update was applied
+        print(f"[SESSION VALIDATE] Verified updated login time: {session.get('login_time')}")
+        
+    print(f"[SESSION VALIDATE] Session is valid")
+    return True
+
+# Translations for multilingual support
+translations = {
+    'en': {  # English
+        'name': 'English',
+        'nav_study': 'Study Buddy',
+        'nav_proofread': 'Proofreading',
+        'nav_entertainment': 'Entertainment',
+        'nav_feedback': 'Feedback',
+        'nav_account': 'Account',
+        'login': 'Login',
+        'sign_up': 'Sign Up',
+        'logout': 'Logout',
+        'welcome_title': 'Welcome to LightYearAI',
+        'welcome_subtitle': 'Your Intelligent Virtual Assistant',
+        'welcome_desc': 'Choose from our suite of AI-powered tools to help with your tasks',
+        'footer_text': 'Powered by Gemini 2.0 Flash',
+        'study_desc': 'Get help with homework, learning new subjects, and understanding complex topics',
+        'proofread_desc': 'Upload your document for comprehensive proofreading and receive a corrected PDF version.',
+        'entertainment_desc': 'Chat about entertainment topics and get creative content',
+        'proofread_upload_mode': 'Upload File',
+        'proofread_write_mode': 'Write Text',
+        'proofread_drop_files': 'Drop your file here or click to browse',
+        'proofread_supported_formats': 'Supported formats: TXT, DOCX, PDF (up to 10MB)',
+        'proofread_text_placeholder': 'Paste or write your text here...',
+        'proofread_proofread_text': 'Proofread Text',
+        'loading': 'Loading...',
+        'proofread_processing': 'Proofreading your document...',
+        'proofread_analyzing': 'Analyzing text and identifying errors',
+        'proofread_complete': 'Proofreading complete! Download your corrected document below.',
+        'proofread_download': 'Download Corrected PDF',
+        'proofread_another': 'Proofread Another Document',
+        'proofread_summary': 'Summary of Corrections',
+        'start_studying': 'Start Studying',
+        'proofread_document': 'Proofread Document',
+        'start_chatting': 'Start Chatting',
+        'about_title': 'About LightYearAI',
+        'about_description': 'LightYearAI is your multipurpose AI-powered helper for a variety of tasks:',
+        'about_study_title': 'Study Buddy',
+        'about_study_desc': 'Get help with homework, explanations, and learning guidance',
+        'about_proofreading_title': 'Proofreading',
+        'about_proofreading_desc': 'Check your documents for grammar, spelling, and style improvements',
+        'about_entertainment_title': 'Entertainment',
+        'about_entertainment_desc': 'Chat about entertainment topics and get creative content',
+        'entertainment_subtitle': 'Chat about movies, music, games, and more!',
+        'entertainment_tips_title': 'Entertainment Tips',
+        'entertainment_tip_fun': 'Keep it fun!',
+        'entertainment_tip_fun_desc': 'Ask about movies, music, games, and more!',
+        'entertainment_tip_specific': 'Be specific',
+        'entertainment_tip_specific_desc': 'Mention genres, artists, or titles for better results',
+        'entertainment_tip_explore': 'Explore categories',
+        'entertainment_tip_explore_desc': 'Switch topics using the colored chips above',
+        'entertainment_tip_emoji': 'Use emojis',
+        'entertainment_tip_emoji_desc': 'Express yourself and get creative!',
+        'entertainment_welcome': 'Hi there! I\'m Liya, your entertainment buddy. What would you like to chat about today?',
+        'study_greeting': 'Hello! I\'m Liya, your study buddy powered by LightYearAI. How can I help you with your studies today?',
+        'study_can_ask_about': 'You can ask me about:',
+        'study_homework_help': 'Homework help and solving practice problems',
+        'study_concept_explanations': 'Explaining difficult concepts in simple terms',
+        'study_tips': 'Study techniques and exam preparation tips',
+        'study_research': 'Research assistance and finding reliable sources',
+        'study_more': 'And much more!',
+        'study_placeholder': 'Ask about a subject, concept, or homework question...',
+        'study_tip_specific': 'Be specific in your questions',
+        'study_tip_specific_desc': 'to get more accurate and helpful answers',
+        'study_tip_subject': 'Mention the subject or grade level',
+        'study_tip_subject_desc': 'for context-appropriate responses',
+        'study_tip_complex': 'Break complex topics into smaller parts',
+        'study_tip_complex_desc': 'to understand each component better',
+        'study_tip_examples': 'Ask for examples or practice problems',
+        'study_tip_examples_desc': 'to reinforce your understanding',
+        'study_upload_pdf': 'Upload PDF',
+        'study_upload_desc': 'Upload a PDF to ask questions about its content',
+        'study_file_supported': 'Supported files: PDF, DOCX (up to 10MB)',
+        'study_analyzing_pdf': 'Analyzing your PDF...',
+        'study_pdf_ready': 'PDF ready! You can now ask questions about this document.',
+        'entertainment_welcome': 'Hi there! I\'m Liya, your entertainment buddy. What would you like to chat about today?',
+        'suggestion_popular_movies': 'What are some popular movies right now?',
+        'suggestion_tv_show': 'Recommend a TV show like Stranger Things',
+        'suggestion_video_games': 'Tell me about new video games',
+        'suggestion_music': 'Who are the trending music artists?',
+        'type_message': 'Type your message here...',
+        'category_all': 'All Topics',
+        'category_movies': 'Movies',
+        'category_tvshows': 'TV Shows',
+        'category_videogames': 'Video Games',
+        'category_music': 'Music',
+        'category_books': 'Books',
+        'category_all_topics': 'all entertainment topics',
+        'now_chatting_about': 'Now chatting about',
+        'entertainment_tooltip': 'Chat about movies, music, TV shows, video games, books and more!',
+        'feedback_title': 'Feedback',
+        'feedback_desc': 'Share your suggestions or improvements with us!',
+        'feedback_placeholder': 'What would you like to see improved or new features added?',
+        'feedback_submit': 'Submit Feedback',
+        'feedback_thanks': 'Thank you for your feedback!',
+        'feedback_error_empty': 'Please enter feedback before submitting.',
+        # Account page translations
+        'account_title': 'Your Account',
+        'subscription_status': 'Subscription Status',
+        'status_label': 'Status',
+        'next_billing_date': 'Next billing date',
+        'plan': 'Plan',
+        'free': 'Free',
+        'premium': 'Premium',
+        'upgrade_to_premium': 'Upgrade to Premium',
+        'manage_subscription': 'Manage Subscription',
+        'daily_token_usage': 'Daily Token Usage',
+        'used_today': 'Used today',
+        'tokens': 'tokens',
+        'upgrade_info': 'Upgrade to Premium for a higher daily token limit (100000 tokens) and enhanced features.',
+        'plan_comparison': 'Plan Comparison',
+        'feature': 'Feature',
+        'free_plan': 'Free Plan',
+        'premium_plan': 'Premium Plan',
+        'daily_token_limit': 'Daily Token Limit',
+        'priority_high_usage': 'Priority During High Usage',
+        'advanced_features': 'Advanced Features',
+        'price': 'Price',
+        'price_per_month': '$9/month',
+        'get_started': 'Get Started',
+        'explore_features': 'Explore Features',
+        'vision_title': 'Our Vision',
+        'vision_text': 'At LightYearAI, we’re building the next generation of agentic AI—intelligent, autonomous assistants that don’t just respond, but take action. Our vision is to empower individuals, creators, and small teams with AI that can think, adapt, and execute tasks across digital workflows. We’re making cutting-edge AI accessible, practical, and safe—designed to evolve with users and act with purpose. By bridging autonomy with usability, our goal is to free people from repetitive work so they can focus on what really matters: building, dreaming, and living fully.',
+    },
+    'pl': {  # Polish
+        'name': 'Polski',
+        'nav_study': 'Nauka',
+        'nav_proofread': 'Korekta',
+        'nav_entertainment': 'Rozrywka',
+        'nav_feedback': 'Opinie',
+        'nav_account': 'Konto',
+        'login': 'Zaloguj się',
+        'sign_up': 'Zarejestruj się',
+        'logout': 'Wyloguj się',
+        'welcome_title': 'Witamy w LightYearAI',
+        'welcome_subtitle': 'Twój Inteligentny Wirtualny Asystent',
+        'welcome_desc': 'Wybierz spośród naszych narzędzi opartych na sztucznej inteligencji, aby pomóc w wykonywaniu zadań',
+        'footer_text': 'Zasilany przez Gemini 2.0 Flash',
+        'study_desc': 'Uzyskaj pomoc w odrabianiu lekcji, nauce nowych przedmiotów i zrozumieniu złożonych tematów',
+        'proofread_desc': 'Prześlij dokumenty do sprawdzenia gramatyki i profesjonalnej edycji',
+        'proofread_upload_mode': 'Prześlij plik',
+        'proofread_write_mode': 'Wpisz tekst',
+        'proofread_drop_files': 'Upuść plik tutaj lub kliknij, aby przeglądać',
+        'proofread_supported_formats': 'Obsługiwane formaty: TXT, DOCX, PDF (do 10MB)',
+        'proofread_text_placeholder': 'Wklej lub wpisz tutaj swój tekst...',
+        'proofread_proofread_text': 'Sprawdź tekst',
+        'loading': 'Ładowanie...',
+        'proofread_processing': 'Sprawdzanie dokumentu...',
+        'proofread_analyzing': 'Analizowanie tekstu i identyfikowanie błędów',
+        'proofread_complete': 'Korekta zakończona! Pobierz poprawiony dokument poniżej.',
+        'proofread_download': 'Pobierz poprawiony PDF',
+        'proofread_another': 'Sprawdź inny dokument',
+        'proofread_summary': 'Podsumowanie poprawek',
+        'entertainment_desc': 'Rozmawiaj o filmach, muzyce, książkach i uzyskaj kreatywne treści',
+        'start_studying': 'Rozpocznij Naukę',
+        'proofread_document': 'Sprawdź Dokument',
+        'start_chatting': 'Rozpocznij Czat',
+        'about_title': 'O LightYearAI',
+        'about_description': 'LightYearAI to Twój wielofunkcyjny pomocnik oparty na sztucznej inteligencji do różnych zadań:',
+        'about_study_title': 'Nauka',
+        'about_study_desc': 'Uzyskaj pomoc z pracami domowymi, wyjaśnieniami i wskazówkami dotyczącymi nauki',
+        'about_proofreading_title': 'Korekta',
+        'about_proofreading_desc': 'Sprawdź swoje dokumenty pod kątem gramatyki, pisowni i ulepszeń stylistycznych',
+        'about_entertainment_title': 'Rozrywka',
+        'about_entertainment_desc': 'Rozmawiaj na tematy rozrywkowe i uzyskaj kreatywne treści',
+        'choose_feature': 'Wybierz dowolną funkcję powyżej, aby rozpocząć!',
+        'study_greeting': 'Cześć! Jestem Liya, Twój asystent do nauki od LightYearAI. Jak mogę Ci dzisiaj pomóc w nauce?',
+        'study_can_ask_about': 'Możesz mnie zapytać o:',
+        'study_homework_help': 'Pomoc w pracach domowych i rozwiązywanie zadań',
+        'study_concept_explanations': 'Wyjaśnianie trudnych pojęć w prosty sposób',
+        'study_tips': 'Techniki nauki i wskazówki do przygotowania do egzaminów',
+        'study_research': 'Pomoc w badaniach i znajdowaniu wiarygodnych źródeł',
+        'study_more': 'I wiele więcej!',
+        'study_placeholder': 'Zapytaj o przedmiot, pojęcie lub zadanie domowe...',
+        'study_tip_specific': 'Zadawaj konkretne pytania',
+        'study_tip_specific_desc': 'aby uzyskać dokładniejsze i pomocne odpowiedzi',
+        'study_tip_subject': 'Wspomnij przedmiot lub poziom nauczania',
+        'study_tip_subject_desc': 'dla odpowiedzi dostosowanych do kontekstu',
+        'study_tip_complex': 'Podziel złożone tematy na mniejsze części',
+        'study_tip_complex_desc': 'aby lepiej zrozumieć każdy element',
+        'study_tip_examples': 'Poproś o przykłady lub zadania praktyczne',
+        'study_tip_examples_desc': 'aby wzmocnić swoje zrozumienie',
+        'study_upload_pdf': 'Prześlij PDF',
+        'study_upload_desc': 'Prześlij plik PDF, aby zadać pytania o jego zawartość',
+        'study_file_supported': 'Wspierane formaty: PDF, DOCX (do 10MB)',
+        'study_analyzing_pdf': 'Analizuję Twój PDF...',
+        'study_pdf_ready': 'PDF gotowy! Możesz teraz zadawać pytania dotyczące tego dokumentu.',
+        'entertainment_welcome': 'Cześć! Jestem Liya, Twój asystent rozrywki. O czym chciałbyś dziś porozmawiać?',
+        'suggestion_popular_movies': 'Jakie są teraz popularne filmy?',
+        'suggestion_tv_show': 'Poleć mi serial podobny do Stranger Things',
+        'suggestion_video_games': 'Opowiedz mi o nowych grach wideo',
+        'suggestion_music': 'Którzy artyści muzyczni są teraz na topie?',
+        'type_message': 'Wpisz swoją wiadomość tutaj...',
+        'category_all': 'Wszystkie Tematy',
+        'category_movies': 'Filmy',
+        'category_tvshows': 'Seriale',
+        'category_videogames': 'Gry Wideo',
+        'category_music': 'Muzyka',
+        'category_books': 'Książki',
+        'category_all_topics': 'wszystkie tematy rozrywkowe',
+        'now_chatting_about': 'Teraz rozmawiamy o',
+        'entertainment_tooltip': 'Rozmawiaj o filmach, muzyce, serialach, grach wideo, książkach i nie tylko!',
+        'feedback_title': 'Opinie',
+        'feedback_desc': 'Podziel się swoimi sugestiami lub udoskonaleniami!',
+        'feedback_placeholder': 'Co chciałbyś ulepszyć lub jakie nowe funkcje dodać?',
+        'feedback_submit': 'Prześlij opinię',
+        'feedback_thanks': 'Dziękujemy za Twoją opinię!',
+        'feedback_error_empty': 'Proszę wpisać opinię przed wysłaniem.',
+        # Account page translations
+        'account_title': 'Twoje konto',
+        'subscription_status': 'Status subskrypcji',
+        'plan': 'Plan',
+        'free': 'Darmowy',
+        'premium': 'Premium',
+        'upgrade_to_premium': 'Przejdź na Premium',
+        'manage_subscription': 'Zarządzaj subskrypcją',
+        'daily_token_usage': 'Dzienne użycie tokenów',
+        'used_today': 'Użyto dzisiaj',
+        'tokens': 'tokeny',
+        'upgrade_info': 'Przejdź na Premium, aby uzyskać wyższy dzienny limit tokenów (100000 tokenów) oraz dodatkowe funkcje.',
+        'plan_comparison': 'Porównanie planów',
+        'feature': 'Funkcja',
+        'free_plan': 'Plan darmowy',
+        'premium_plan': 'Plan Premium',
+        'daily_token_limit': 'Dzienne limity tokenów',
+        'priority_high_usage': 'Priorytet przy dużym obciążeniu',
+        'advanced_features': 'Zaawansowane funkcje',
+        'price': 'Cena',
+        'price_per_month': '9 USD/miesiąc',
+        'get_started': 'Zaczynamy',
+        'explore_features': 'Poznaj funkcje',
+        'vision_title': 'Nasza Wizja',
+        'vision_text': 'Budujemy następną generację agentowego AI — inteligentnych, autonomicznych asystentów, którzy nie tylko odpowiadają, ale też podejmują działania. Naszą wizją jest wspieranie osób, twórców i małych zespołów AI, które potrafi myśleć, adaptować się i wykonywać zadania w ramach cyfrowych przepływów pracy. Umożliwiamy dostęp do najnowszych technologii AI, czyniąc je praktycznymi i bezpiecznymi — zaprojektowanymi tak, aby rozwijały się razem z użytkownikami i działały z zamiarem. Łącząc autonomię z użytecznością, naszym celem jest uwolnienie ludzi od monotonnego, rutynowego zajęcia, aby mogli skupić się na tym, co naprawdę ma znaczenie: tworzeniu, marzeniu i pełnym życiu.',
+    },
+    'az': {  # Azerbaijani
+        'name': 'Azərbaycanca',
+        'nav_study': 'Təhsil Köməkçisi',
+        'nav_proofread': 'Redaktə',
+        'nav_entertainment': 'Əyləncə',
+        'nav_feedback': 'Rəy',
+        'nav_account': 'Hesab',
+        'login': 'Daxil ol',
+        'sign_up': 'Qeydiyyatdan keç',
+        'logout': 'Çıxış',
+        'welcome_title': 'LightYearAI-a Xoş Gəlmisiniz',
+        'welcome_subtitle': 'Sizin İntellektual Virtual Köməkçiniz',
+        'welcome_desc': 'Tapşırıqlarınıza kömək etmək üçün süni intellekt əsaslı alətlərimizdən seçin',
+        'footer_text': 'Gemini 2.0 Flash tərəfindən təchiz edilmişdir',
+        'study_desc': 'Ev tapşırıqları, yeni mövzuların öyrənilməsi və mürəkkəb mövzuların başa düşülməsi ilə bağlı kömək alın',
+        'proofread_desc': 'Qrammatik yoxlama və peşəkar redaktə üçün sənədlər yükləyin',
+        'proofread_upload_mode': 'Faylı Yükləyin',
+        'proofread_write_mode': 'Mətn Yazın',
+        'proofread_drop_files': 'Faylı buraya sürüşdürün və ya klikləyin',
+        'proofread_supported_formats': 'Dəstəklənən formatlar: TXT, DOCX, PDF (10MB-dək)',
+        'entertainment_desc': 'Filmlər, musiqi, kitablar haqqında söhbət edin və yaradıcı məzmun əldə edin',
+        'start_studying': 'Öyrənməyə Başlayın',
+        'proofread_document': 'Sənədi Redaktə Et',
+        'start_chatting': 'Söhbətə Başlayın',
+        'about_title': 'LightYearAI Haqqında',
+        'about_description': 'LightYearAI müxtəlif tapşırıqlar üçün süni intellektlə işləyən çoxməqsədli köməkçinizdir:',
+        'about_study_title': 'Təhsil Köməkçisi',
+        'about_study_desc': 'Ev tapşırıqları, izahatlar və öyrənmə təlimatları ilə kömək alın',
+        'about_proofreading_title': 'Redaktə',
+        'about_proofreading_desc': 'Sənədlərinizi qrammatika, imla və üslub təkmilləşdirmələri üçün yoxlayın',
+        'about_entertainment_title': 'Əyləncə',
+        'about_entertainment_desc': 'Əyləncə mövzuları haqqında söhbət edin və yaradıcı məzmun əldə edin',
+        'entertainment_subtitle': 'Filmlər, musiqi, oyunlar və daha çox barədə söhbət edin!',
+        'entertainment_tips_title': 'Əyləncə Məsləhətləri',
+        'entertainment_tip_fun': 'Əyləncəli saxlayın!',
+        'entertainment_tip_fun_desc': 'Filmlər, musiqi, oyunlar və daha çox barədə soruşun!',
+        'entertainment_tip_specific': 'Dəqiq olun',
+        'entertainment_tip_specific_desc': 'Daha yaxşı nəticələr üçün janrları, sənətçiləri və ya başlıqları qeyd edin',
+        'entertainment_tip_explore': 'Kateqoriyaları araşdırın',
+        'entertainment_tip_explore_desc': 'Yuxarıdakı rəngli çiplərdən istifadə edərək mövzuları dəyişin',
+        'entertainment_tip_emoji': 'Emoji istifadə edin',
+        'entertainment_tip_emoji_desc': 'Özünüzü ifadə edin və yaradıcı olun!',
+        'type_message': 'Mesajınızı buraya yazın...',
+        'suggestion_popular_movies': 'Hal-hazırda hansı filmlər məşhurdur?',
+        'suggestion_tv_show': 'Stranger Things kimi bir serial tövsiyə et',
+        'suggestion_video_games': 'Yeni video oyunlar haqqında danış',
+        'suggestion_music': 'Trend olan musiqi ifaçıları kimlərdir?',
+        # Proofread page translations
+        'proofread_text_placeholder': 'Mətn yapışdırın və ya buraya yazın...',
+        'proofread_proofread_text': 'Mətn Redaktə et',
+        # Entertainment page title and categories
+        'entertainment_title': 'Əyləncə',
+        'category_all': 'Bütün Mövzular',
+        'category_movies': 'Filmlər',
+        'category_tvshows': 'TV Seriallar',
+        'category_videogames': 'Video Oyunlar',
+        'category_music': 'Musiqi',
+        'category_books': 'Kitablar',
+        'category_all_topics': 'bütün əyləncə mövzuları',
+        # Feedback page translations
+        'feedback_title': 'Rəy',
+        'feedback_desc': 'Təkliflərinizi və ya təkmilləşdirmələrinizi bizimlə bölüşün!',
+        'feedback_placeholder': 'Təkmilləşdirmək istədiyiniz və ya əlavə olunmasını istədiyiniz yeni xüsusiyyətləri yazın',
+        'feedback_submit': 'Rəy göndər',
+        # Feedback errors and success for Azerbaijani
+        'feedback_thanks': 'Rəyiniz üçün təşəkkür edirik!',
+        'feedback_error_empty': 'Göndərmədən əvvəl zəhmət olmasa rəy yazın.',
+        # Study Buddy page translations (Azerbaijani)
+        'study_upload_pdf': 'PDF yükləyin',
+        'study_upload_desc': 'Məzmun barədə suallar vermək üçün PDF yükləyin',
+        'study_file_supported': 'Dəstəklənən fayllar: PDF, DOCX (10MB-dək)',
+        'study_analyzing_pdf': 'PDF-nizi təhlil edirəm...',
+        'study_pdf_ready': 'PDF hazırdır! İndi bu sənəd haqqında suallar verə bilərsiniz.',
+        'study_greeting': 'Salam! Mən Liya, sizin təhsil köməkçinizəm. Bu gün təhsilinizə necə kömək edə bilərəm?',
+        'study_can_ask_about': 'Mənə bunlar barədə sual verə bilərsiniz:',
+        'study_homework_help': 'Ev tapşırıqları üzrə kömək',
+        'study_concept_explanations': 'Çətin anlayışların izahı',
+        'study_tips': 'Öyrənmə ipuçları',
+        'study_research': 'Tədqiqat yardımı',
+        'study_more': 'Və daha çox!',
+        'study_placeholder': 'Öyrənmə sualınızı buraya yazın...',
+        'study_tips_title': 'Öyrənmə Məsləhətləri',
+        'study_tip_specific': 'Sualınızda dəqiq olun',
+        'study_tip_specific_desc': 'daha düzgün cavablar almaq üçün',
+        'study_tip_subject': 'Fənni qeyd edin',
+        'study_tip_subject_desc': 'kontekstə uyğun cavablar üçün',
+        'study_tip_complex': 'Mürəkkəb mövzuları bölün',
+        'study_tip_complex_desc': 'kiçik suallar şəklində',
+        'study_tip_examples': 'Nümunələr istəyin',
+        'study_tip_examples_desc': 'daha yaxşı başa düşmək üçün',
+        # Account page translations
+        'account_title': 'Sizin Hesabınız',
+        'subscription_status': 'Abunəlik Statusu',
+        'status_label': 'Status',
+        'next_billing_date': 'Növbəti ödəniş tarixi',
+        'plan': 'Plan',
+        'free': 'Pulsuz',
+        'premium': 'Premium',
+        'upgrade_to_premium': 'Premium-a yüksəldin',
+        'manage_subscription': 'Abunəliyi idarə et',
+        'daily_token_usage': 'Gündəlik token istifadəsi',
+        'used_today': 'Bu gün istifadə olunub',
+        'tokens': 'tokenlər',
+        'upgrade_info': 'Daha yüksək gündəlik token limiti (100000 token) və artırılmış xüsusiyyətlər üçün Premium-a yüksəldin.',
+        'plan_comparison': 'Planların müqayisəsi',
+        'feature': 'Xüsusiyyət',
+        'free_plan': 'Pulsuz Plan',
+        'premium_plan': 'Premium Plan',
+        'daily_token_limit': 'Gündəlik token limiti',
+        'priority_high_usage': 'Yüksək yüklənmə zamanı prioritet',
+        'advanced_features': 'Təkmil xüsusiyyətlər',
+        'price': 'Qiymət',
+        'price_per_month': '9$/ay',
+        'get_started': 'Başla',
+        'explore_features': 'Xüsusiyyətləri kəşf et',
+        'vision_title': 'Bizim Görünüşümüz',
+        'vision_text': 'LightYearAI-da biz cavab verməklə kifayətlənməyən, hərəkət edən növbəti nəsil agentik süni intellekti — ağıllı, müstəqil köməkçilər yaradırıq. Bizim vizyonumuz fərdləri, yaradıcıları və kiçik komandaları düşünə, uyğunlaşa və rəqəmsal iş prosesləri ərzində tapşırıqları yerinə yetirə bilən AI ilə səlahiyyətləndirməkdir. Biz qabaqcıl AI texnologiyasını əlçatan, praktik və təhlükəsiz edirik — istifadəçilərlə birlikdə inkişaf etməsi və məqsədli hərəkət etməsi üçün dizayn olunmuşdur. Avtonomiyanı istifadə rahatlığı ilə birləşdirərək, məqsədimiz insanları təkrarlanan işlərdən azad etmək və onlar üçün əsas olan işlərlə — yaratmaqla, arzu etməklə və tam həyat sürməklə məşğul olmağa imkan verməkdir.',
+    }
+}
+
+language_names = {
+    'en': 'English',
+    'pl': 'Polski',
+    'az': 'Azərbaycanca'
+}
+
+# Set up upload folder for production or development
+if (os.environ.get('RENDER')):
+    # For Render.com deployment - use a folder in the app directory
+    app.config['UPLOAD_FOLDER'] = os.path.join(os.path.dirname(os.path.abspath(__file__)), 'uploads')
+else:
+    # For local development - use temp directory
+    app.config['UPLOAD_FOLDER'] = os.path.join(tempfile.gettempdir(), 'uploads')
+
+app.config['MAX_CONTENT_LENGTH'] = (10 * 1024 * 1024)  # 10MB max upload
+
+# Create upload folder if it doesn't exist
+os.makedirs(app.config['UPLOAD_FOLDER'], exist_ok=True)
+
+# Initialize the Gemini model
+model = genai.GenerativeModel('gemini-2.0-flash')
+
+# Function to get AI response
+def get_ai_response(prompt, history=None, system_prompt=None, language=None):
+    try:
+        # Determine language for response if not explicitly provided
+        if (language is None):
+            language = (g.current_language if hasattr(g, 'current_language') else 'en')
+        
+        # Add language instruction to system_prompt
+        language_instructions = {
+            'en': "Please respond in English.",
+            'pl': "Proszę odpowiadać w języku polskim.",
+            'az': "Zəhmət olmasa Azərbaycan dilində cavab verin."
+        }
+        
+        # Define identity information (only to be used when directly asked)
+        identity_info = {
+            'en': "Your name is Liya. You are an AI assistant created by LightYearAI, powered by Google's Gemini model. If asked about your creator, founder, or who made you, mention that you were developed by LightYearAI.",
+            'pl': "Nazywasz się Liya. Jesteś asystentem AI stworzonym przez LightYearAI, opartym na modelu Gemini od Google. Jeśli zapytają o twojego twórcę, założyciela lub kto cię stworzył, wspomnij, że zostałaś stworzona przez LightYearAI.",
+            'az': "Sizin adınız Liya-dır. Siz Google-ın Gemini modeli ilə işləyən LightYearAI tərəfindən yaradılmış AI köməkçisisiniz. Əgər yaradıcınız, təsisçiniz və ya sizi kimin yaratdığı haqqında soruşsalar, LightYearAI tərəfindən yaradıldığınızı qeyd edin."
+        }
+        
+        language_instruction = language_instructions.get(language, "Please respond in English.")
+        identity_information = identity_info.get(language, identity_info['en'])
+
+        # Instruction to keep responses natural and never mention AI/limitations
+        natural_instruction = {
+            'en': "Never mention that you are an AI, language model, or chatbot. Do not use disclaimers about your abilities or limitations. Respond as a friendly, knowledgeable assistant in a natural, casual, and human-like way.",
+            'pl': "Nigdy nie wspominaj, że jesteś AI, modelem językowym lub chatbotem. Nie używaj zastrzeżeń dotyczących swoich możliwości lub ograniczeń. Odpowiadaj jako przyjazny, kompetentny asystent w naturalny, swobodny i ludzki sposób.",
+            'az': "Heç vaxt süni intellekt, dil modeli və ya çatbot olduğunuzu qeyd etməyin. Bacarıq və məhdudiyyətləriniz barədə heç bir açıqlama verməyin. Cavablarınızı səmimi, bilikli və insan kimi təbii şəkildə verin."
+        }
+        natural_instruction_text = natural_instruction.get(language, natural_instruction['en'])
+        
+        # Check if user is asking about identity
+        is_identity_question = False
+        identity_keywords = [
+            'your name', 'who are you', 'who made you', 'who created you', 
+            'your creator', 'what are you called', 'what\'s your name',
+            'what is your name', 'kim olduğun', 'kim yaratdı', 'adın nədir',
+            'kim seni yarattı', 'kim jesteś', 'kto cię stworzył', 'jak się nazywasz',
+            'twój twórca', 'twoje imię', 'nazywasz się', 'founder', 'made by',
+            'developed by', 'company', 'LightYearAI', 'Liya', 'your identity'
+        ]
+        
+        # Check if prompt contains identity-related keywords
+        for keyword in identity_keywords:
+            if (keyword.lower() in prompt.lower()):
+                is_identity_question = True
+                break
+        
+        # Prepare the conversation
+        if (history):
+            # For ongoing conversations, use identity only if specifically asked
+            chat = model.start_chat(history=history)
+            if (is_identity_question):
+                response = chat.send_message(f"{identity_information}\n\n{natural_instruction_text}\n\n{prompt}\n\n{language_instruction}")
+            else:
+                response = chat.send_message(f"{natural_instruction_text}\n\n{prompt}\n\n{language_instruction}")
+        else:
+            # For new conversations
+            if (system_prompt):
+                # Only include identity in system prompt if specifically asked
+                if (is_identity_question):
+                    system_prompt = f"{system_prompt}\n\n{identity_information}\n\n{natural_instruction_text}\n\n{language_instruction}"
+                else:
+                    system_prompt = f"{system_prompt}\n\n{natural_instruction_text}\n\n{language_instruction}"
+                
+                combined_prompt = f"{system_prompt}\n\nUser request: {prompt}"
+                response = model.generate_content(combined_prompt)
+            else:
+                # When no system prompt, still check if identity question
+                if (is_identity_question):
+                    response = model.generate_content(f"{identity_information}\n\n{natural_instruction_text}\n\n{prompt}\n\n{language_instruction}")
+                else:
+                    response = model.generate_content(f"{natural_instruction_text}\n\n{prompt}\n\n{language_instruction}")
+        
+        return response.text
+    except Exception as e:
+        print(f"Error getting AI response: {e}")
+        if (language == 'pl'):
+            return f"Przepraszam, napotkałem błąd: {str(e)}"
+        elif (language == 'az'):
+            return f"Üzr istəyirəm, bir xəta baş verdi: {str(e)}"
+        else:
+            return f"Sorry, I encountered an error: {str(e)}"
+
+# Language route
+@app.route('/set_language/<lang>')
+def set_language(lang):
+    # Set the language in session
+    if (lang in translations):
+        session['language'] = lang
+    # Get the 'next' parameter for redirect, defaulting to the home page
+    next_page = request.args.get('next', '/')
+    return redirect(next_page)
+
+# Before request handler to set language
+@app.before_request
+def before_request():
+    # Session persistence debugging
+    has_current_file = 'current_file' in session
+    current_file_size = len(session.get('current_file', {}).get('content', '')) if has_current_file else 0
+    has_file_id = bool(session.get('current_file', {}).get('file_id')) if has_current_file else False
+    endpoint = request.endpoint
+    
+    if '/static/' not in request.path and request.path != '/favicon.ico':
+        print(f"[SESSION TRACKING] Request to {request.path} ({endpoint})")
+        print(f"[SESSION TRACKING] Has current_file: {has_current_file}, Content size: {current_file_size}, Has file_id: {has_file_id}")
+    
+    # Set default language if not set
+    if ('language' not in session):
+        session['language'] = 'en'
+      # Make current language and translations available to all templates
+    g.current_language = session.get('language', 'en')
+    g.current_language_name = translations[g.current_language]['name']
+    g.translations = translations[g.current_language]
+    g.available_languages = language_names  # Provide available languages to templates    # User info for navbar
+    g.user_name = session.get('user_name')
+    g.user_picture = session.get('user_picture')
+    g.user_id = session.get('user_id')  # Make user_id available to templates
+    
+    # Add Firebase configuration to all templates
+    g.firebase_api_key = os.environ.get('FIREBASE_API_KEY', '')
+    g.firebase_auth_domain = os.environ.get('FIREBASE_AUTH_DOMAIN', '')
+    g.firebase_project_id = os.environ.get('FIREBASE_PROJECT_ID', '')
+    g.firebase_storage_bucket = os.environ.get('FIREBASE_STORAGE_BUCKET', '')
+    g.firebase_messaging_sender_id = os.environ.get('FIREBASE_MESSAGING_SENDER_ID', '')
+    g.firebase_app_id = os.environ.get('FIREBASE_APP_ID', '')
+    
+    # Add token usage data for authenticated users
+    user_id = session.get('user_id')
+    # Import inside function to avoid circular imports
+    from firebase_admin import firestore
+    
+    # Initialize token usage variables with default values
+    g.plan = 'free'
+    g.current_usage = 0
+    g.daily_limit = FREE_PLAN_DAILY_LIMIT
+    g.usage_percentage = 0
+    g.remaining_tokens = FREE_PLAN_DAILY_LIMIT
+    
+    try:
+        # Make sure user_id is a valid value, not None or empty string
+        if user_id and str(user_id).strip():
+            db = firestore.client()
+            
+            # Get user's subscription status
+            subscription = get_user_subscription(user_id)
+            plan = subscription.get('plan', 'free')
+            
+            # Get user's token usage for today
+            current_usage = get_user_daily_token_usage(user_id)
+            
+            # Handle case where current_usage might be a dictionary or integer
+            if isinstance(current_usage, dict):
+                tokens_used = current_usage.get('tokens_used', 0)
+            else:
+                tokens_used = current_usage
+            
+            # Get plan limits
+            daily_limit = FREE_PLAN_DAILY_LIMIT if (plan == 'free') else PAID_PLAN_DAILY_LIMIT
+            
+            # Calculate percentage used
+            usage_percentage = min(round((tokens_used / daily_limit) * 100), 100) if (daily_limit > 0) else 0
+            
+            # Set token data for all templates
+            g.plan = plan
+            g.current_usage = tokens_used
+            g.daily_limit = daily_limit
+            g.usage_percentage = usage_percentage
+            g.remaining_tokens = daily_limit - tokens_used
+    except Exception as e:
+        print(f"[TOKEN ERROR] Failed to retrieve token usage data: {e}")
+        # Error handling is not needed here since we already set default values
+    
+    # Additional session debugging only for non-static requests
+    if '/static/' not in request.path and request.path != '/favicon.ico':
+        print(f"[SESSION DEBUG] Cookie session ID: {request.cookies.get('session', 'no-session-cookie')[:10]}...")
+        print(f"[SESSION DEBUG] Session modified flag: {session.modified}")
+        if has_current_file:
+            print(f"[SESSION DEBUG] File metadata: {session['current_file'].get('filename')}, uploaded: {session['current_file'].get('upload_time')}")
+    # Add Firestore client to template context
+    g.db = firestore.client() if firebase_admin._apps else None
+    print('SESSION:', dict(session))
+    print('g.user_name:', g.user_name, 'g.user_picture:', g.user_picture)
+
+    # Add Firebase configuration to all templates
+    g.firebase_api_key = os.environ.get('FIREBASE_API_KEY', '')
+    g.firebase_auth_domain = os.environ.get('FIREBASE_AUTH_DOMAIN', '')
+    g.firebase_project_id = os.environ.get('FIREBASE_PROJECT_ID', '')
+    g.firebase_storage_bucket = os.environ.get('FIREBASE_STORAGE_BUCKET', '')
+    g.firebase_messaging_sender_id = os.environ.get('FIREBASE_MESSAGING_SENDER_ID', '')
+    g.firebase_app_id = os.environ.get('FIREBASE_APP_ID', '')
+
+@app.route('/')
+def index():
+    # Debug session content
+    print(f"[INDEX ROUTE] Session keys: {list(session.keys())}")
+    print(f"[INDEX ROUTE] User ID in session: {session.get('user_id')}")
+    print(f"[INDEX ROUTE] Session modified flag: {session.modified}")
+    print(f"[INDEX ROUTE] Session cookie: {request.cookies.get('session', 'no-session-cookie')[:10]}...")
+    print(f"[INDEX ROUTE] Has session cookie: {'session' in request.cookies}")
+    try:
+        # Check for user_id first
+        if 'user_id' not in session or not session.get('user_id'):
+            print(f"[INDEX ROUTE] No user_id in session, showing landing page")
+            # Add flag to indicate this is the homepage so we can disable loading screen
+            return render_template('index.html', is_homepage=True)
+            
+        # If user_id exists, validate the full session
+        if validate_session():
+            print(f"[INDEX ROUTE] User is logged in with valid session ID {session.get('user_id')}, redirecting to unified_chat")
+            return redirect(url_for('unified_chat'))
+        else:
+            # If validation fails, clear the session
+            print(f"[INDEX ROUTE] Invalid session detected, clearing session")
+            session.clear()
+            # Add a flash message to inform the user
+            flash('Your session has expired. Please log in again.', 'warning')
+            # Add flag to indicate this is the homepage so we can disable loading screen
+            return render_template('index.html', is_homepage=True)
+    except Exception as e:
+        print(f"[INDEX ROUTE] Unexpected error during session validation: {e}")
+        import traceback
+        print(f"[INDEX ROUTE] Error traceback: {traceback.format_exc()}")
+        session.clear()
+        flash('An error occurred during session validation. Please log in again.', 'danger')
+      # Show landing page for non-logged in users
+    print("[INDEX ROUTE] User is not logged in, showing landing page")
+    # Add flag to indicate this is the homepage so we can disable loading screen
+    return render_template('index.html', is_homepage=True)
+
+@app.route('/unified_chat')
+@login_required
+def unified_chat():
+    # Double check that the user is properly authenticated
+    print(f"[UNIFIED_CHAT] User ID in session: {session.get('user_id')}")
+    print(f"[UNIFIED_CHAT] Session modified flag: {session.modified}")
+    print(f"[UNIFIED_CHAT] Session login time: {session.get('login_time')}")
+    print(f"[UNIFIED_CHAT] Session cookie present: {'session' in request.cookies}")
+    
+    # Redundant check since @login_required should already validate
+    # but keeping it for extra safety
+    if not session.get('user_id') or not validate_session():
+        # Clear any invalid session data
+        print("[UNIFIED_CHAT] Invalid session detected, clearing session and redirecting to login")
+        session.clear()
+        flash('Your session has expired. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    
+    # Unified single-page chat interface with all features
+    print(f"[UNIFIED_CHAT] Loading chat interface for user {session.get('user_id')}")
+    
+    try:
+        # Ensure Firebase connection is still valid
+        from firebase_admin import auth
+        user = auth.get_user(session.get('user_id'))
+        print(f"[UNIFIED_CHAT] Firebase verified user: {user.uid}")
+    except Exception as e:
+        print(f"[UNIFIED_CHAT] Firebase verification failed: {e}")
+        session.clear()
+        flash('Authentication error. Please login again.', 'warning')
+        return redirect(url_for('login'))
+    
+    # Additional diagnostic logging
+    print(f"[UNIFIED_CHAT] Session data before rendering: {dict(session)}")
+    
+    try:
+        return render_template('base.html', active_page='unified_chat')
+    except Exception as e:
+        print(f"[UNIFIED_CHAT] Template rendering error: {e}")
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"[UNIFIED_CHAT] Error traceback: {error_trace}")
+        
+        # Provide a more graceful fallback
+        return """
+        <html>
+        <head>
+            <title>LightYearAI - Error</title>
+            <style>
+                body { font-family: Arial, sans-serif; margin: 40px; line-height: 1.6; }
+                .error-container { max-width: 800px; margin: 0 auto; padding: 20px; border: 1px solid #ddd; border-radius: 5px; }
+                h1 { color: #c00; }
+                .btn { display: inline-block; padding: 10px 20px; background: #0066cc; color: white; text-decoration: none; border-radius: 4px; }
+            </style>
+        </head>
+        <body>
+            <div class="error-container">
+                <h1>An error occurred</h1>
+                <p>We're sorry, but something went wrong while loading the application. This might be due to a temporary issue.</p>
+                <p>Please try:</p>
+                <ul>
+                    <li>Refreshing the page</li>
+                    <li><a href="/logout">Logging out</a> and logging back in</li>
+                    <li>Clearing your browser cookies and cache</li>
+                </ul>
+                <p><a href="/login" class="btn">Return to Login Page</a></p>
+            </div>
+        </body>
+        </html>
+        """, 500
+
+# The routes below are kept for API endpoints but the UI redirects to unified_chat
+@app.route('/chat')
+@login_required
+def chat():
+    return redirect(url_for('unified_chat'))
+
+@app.route('/study')
+@login_required
+def study():
+    return redirect(url_for('unified_chat'))
+
+@app.route('/proofread')
+@login_required
+def proofread():
+    return redirect(url_for('unified_chat'))
+
+@app.route('/entertainment')
+@login_required
+def entertainment():
+    return redirect(url_for('unified_chat'))
+
+@app.route('/command_test')
+def command_fallback_test():
+    # Test page for command fallback UI
+    return render_template('command_fallback_test.html')
+
+@app.route('/nl_command_test')
+def nl_command_test():
+    # Test page for natural language command detection
+    return render_template('nl_command_test.html')
+
+# Study Buddy Routes
+# --- User Memory Store (Firestore persistent) ---
+def update_user_memory(user_id, key, value):
+    if (not user_id):
+        return
+    
+    # Get the Firestore client from g or import it directly
+    from firebase_admin import firestore
+    db = firestore.client()
+    
+    try:
+        # Update the memory in Firestore
+        db.collection('user_memories').document(user_id).set({
+            key: value
+        }, merge=True)
+        return True
+    except Exception as e:
+        print(f"Error updating user memory: {e}")
+        return False
+
+def get_user_memory(user_id, key, default=None):
+    if (not user_id):
+        return default
+    
+    # Get the Firestore client
+    from firebase_admin import firestore
+    db = firestore.client()
+    
+    doc = db.collection('user_memories').document(user_id).get()
+    if (doc.exists):
+        return doc.to_dict().get(key, default)
+    return default
+
+@app.route('/study/chat', methods=['POST'])
+@login_required
+async def study_chat():
+    """
+    Process study chat requests with MCP integration and improved file handling.
+    This is an async route that properly uses Flask's async support.
+    """
+    # Double check that the user is properly authenticated
+    if not session.get('user_id'):
+        # Clear any invalid session data
+        session.clear()
+        return jsonify({
+            'response': "<p>You need to be logged in to use the chat. Please login first.</p>",
+            'error': 'authentication_required'
+        }), 401
+    # Use the helper function to verify session state at the beginning of the request
+    verify_session_state("study_chat_start")
+    
+    data = request.json
+    print(f"DEBUG: study_chat called with data keys: {list(data.keys())}")
+    user_message = data.get('message', '')
+    pdf_content = data.get('pdfContent', None)
+    file_id = data.get('fileId', None)
+    formatted_response = "<p>Response processing error</p>"  # Default value in case of errors
+    
+    # Log session information to help debug
+    print(f"DEBUG: Session info - user_id: {session.get('user_id')}")
+    if 'current_file' in session:
+        print(f"DEBUG: Session has current_file with keys: {list(session['current_file'].keys())}")
+        print(f"DEBUG: Current file in session - filename: {session['current_file'].get('filename')}, id: {session['current_file'].get('file_id')}")
+        print(f"DEBUG: Content length in session: {len(session['current_file'].get('content', ''))}")
+    
+    # Support front-end upload flags to load file context
+    # First check if hasFile or hasFileId flags are set
+    has_file_flag = data.get('hasFile', False)
+    has_file_id_flag = data.get('hasFileId', False)
+    print(f"DEBUG: Upload flags: hasFileId={has_file_id_flag}, hasFile={has_file_flag}")
+    print(f"DEBUG: File data: pdf_content={bool(pdf_content)}, file_id={file_id}")
+    print(f"DEBUG: Current file in session: {'current_file' in session}")
+    
+    # If flags are set but we don't have content yet, get it from session
+    if (has_file_flag or has_file_id_flag) and not pdf_content and 'current_file' in session:
+        print("Loading file content from session due to flags")
+        pdf_content = session['current_file'].get('content')
+        file_id = session['current_file'].get('file_id')
+        print(f"Loaded file from session: id={file_id}, content_length={len(pdf_content) if pdf_content else 0}")
+    user_id = session.get('user_id')
+    session_id = (data.get('sessionId') or str(int((time.time() * 1000))))
+    
+    try:
+        # Check if user has exceeded their token limit
+        can_use, remaining_tokens = check_user_token_limit(user_id)
+        
+        if (not can_use):
+            return jsonify({
+                'response': "<p>You've reached your daily token limit. Please try again tomorrow or upgrade to premium for a higher limit.</p>",
+                'error': 'token_limit_exceeded'
+            })
+
+        # Import necessary Firebase functions
+        from firebase_utils import (
+            get_chat_history, 
+            save_chat_message, 
+            format_chat_history_for_api, 
+            get_file_from_storage,
+            download_file_content
+        )        
+        # Add more detailed logging about file processing
+        print(f"Processing chat with: user_message='{user_message[:50]}...'")
+        print(f"File info: file_id={file_id}, has_pdf_content={bool(pdf_content)}")
+        
+        # If we have a file ID but no pdf_content, fetch it from Firebase Storage or session
+        if file_id and not pdf_content:
+            try:
+                print(f"File ID detected: {file_id} - Attempting to retrieve content")
+
+                # First check if it's in the session
+                if 'current_file' in session and session['current_file'].get('file_id') == file_id:
+                    print("Using file content from session")
+                    pdf_content = session['current_file'].get('content')
+                    
+                    # Verify content was actually retrieved
+                    if pdf_content:
+                        print(f"Retrieved {len(pdf_content)} characters from session")
+                    else:
+                        print("WARNING: File content missing in session despite file_id match")
+
+                # If not in session or content is empty, download it
+                if not pdf_content:
+                    print("Downloading file content from Firebase")
+                    pdf_content = download_file_content(file_id)
+
+                    # Get file metadata
+                    file_info = get_file_from_storage(file_id)
+                    if file_info:                    
+                        # Track session state before updating
+                        before_session = session.get('current_file', {})
+                        before_content_length = len(before_session.get('content', '')) if before_session else 0
+                        
+                        # Store the complete file information in session
+                        session['current_file'] = {
+                            'file_id': file_id,
+                            'filename': file_info.get('filename', 'document.pdf'),
+                            'content': pdf_content,
+                            'download_url': file_info.get('download_url', ''),
+                            'storage_path': file_info.get('storage_path', ''),
+                            'updated_at': datetime.now().isoformat()  # Track when this was last updated
+                        }
+                        session.modified = True
+                        
+                        # Verify session update immediately
+                        content_length = len(pdf_content) if pdf_content else 0
+                        print(f"[SESSION UPDATE] Previous content length: {before_content_length}, New content length: {content_length}")
+                        print(f"[SESSION UPDATE] Updated session with file_id={file_id}, content_length={content_length}")
+                        
+                        # Verify the session data is actually stored
+                        verification_content_length = len(session['current_file'].get('content', ''))
+                        print(f"[SESSION VERIFY] After update, session content length: {verification_content_length}")
+                        print(f"[SESSION VERIFY] Session modified flag: {session.modified}")
+                        
+                        # Dump session info for debugging
+                        print(f"[SESSION KEYS] {list(session.keys())}")
+                        if 'current_file' in session:
+                            print(f"[SESSION FILE KEYS] {list(session['current_file'].keys())}")
+                
+                if not pdf_content:
+                    print(f"Failed to retrieve content for file ID {file_id}")
+            except Exception as storage_error:
+                print(f"Error retrieving file from Firebase Storage: {storage_error}")
+                # Check if user is referring to a file without explicitly mentioning file_id
+            # This should also run even if we already got pdf_content above, as a double-check
+            if 'current_file' in session and session['current_file'].get('content'):
+                # Check if message contains file reference terms or is asking about document content
+                file_reference_terms = [
+                    # Direct file references
+                    "file", "document", "pdf", "uploaded", "attachment", "content",
+                    "the document", "this document", "that file", "the file", "the pdf", "this pdf",
+                    # Contextual references
+                    "on this", "in this", "about this", "from this", "through this", "of this",
+                    "what is this", "what's this", "what does this", "what's in this", "what is in", "what does it say",
+                    # Actions on documents
+                    "analyze", "summarize", "explain", "extract", "read", "understand",
+                    "review", "describe", "tell me about", "find", "search", "look for",
+                    # Document types
+                    "lecture", "slide", "page", "text", "paper", "report", "article",
+                    "essay", "thesis", "chapter", "section", "paragraph", "assignment",
+                    "book", "letter", "email", "message", "transcript", "publication",
+                    # File actions
+                    "download", "downloaded", "saved", "got", "received", "opened", "attached",
+                    "sent", "shared", "just sent", "just shared", "just uploaded", "uploaded",
+                    # Study materials
+                    "material", "notes", "textbook", "manual", "guide", "instructions",
+                    "information", "data", "source", "reference",
+                    # Personal statements
+                    "i opened", "i saved", "i downloaded", "i got", "i have", "i sent", "i shared",
+                    "i uploaded", "i attached", "i wrote", "i created", "i made"
+                ]
+
+            # Add specific file extensions people might mention
+            file_extensions = ["pdf", "docx", "doc", "txt", "ppt", "pptx", "xlsx", "xls"]
+            for ext in file_extensions:
+                if ext in user_message.lower() or f".{ext}" in user_message.lower():
+                    print(f"File extension '{ext}' detected in message")
+                    file_reference_terms.append(ext)
+
+            # Check if the filename is mentioned in the message
+            if 'current_file' in session and session['current_file'].get('filename'):
+                filename = session['current_file'].get('filename')
+
+                # Clean the filename and check if it or parts of it appear in the message
+                clean_filename = os.path.splitext(filename)[0].lower().replace('_', ' ').replace('-', ' ')
+                filename_parts = clean_filename.split()
+                for part in filename_parts:
+                    if len(part) > 3 and part.lower() in user_message.lower():
+                        print(f"Filename part '{part}' detected in message")
+                        file_reference_terms.append(part)
+
+            # Check if any file reference term is in the message (case insensitive)
+            has_file_reference = any(term.lower() in user_message.lower() for term in file_reference_terms)
+
+            # Common question patterns about document content
+            document_question_patterns = [
+                r"what.*about",
+                r"what.*contain",
+                r"what.*in it",
+                r"what.*say",
+                r"what.*is it",
+                r"what.*does it",
+                r"tell.*about",
+                r"explain.*to me",
+                r"summarize.*for me",
+                r"help.*understand",
+                r"can you.*explain",
+                r"what.*topic",
+                r"what's.*main point",
+                r"what are.*key",
+                r"show.*content",
+                r"give.*overview",
+                r"provide.*summary"
+            ]
+
+            # Check for question patterns
+            has_document_question = any(re.search(pattern, user_message.lower()) for pattern in document_question_patterns)
+            
+            if has_file_reference or has_document_question or not pdf_content:
+                print(f"Detected file reference in message or using default file: '{user_message}', retrieving file from session")
+                current_pdf_content = session['current_file'].get('content')
+                
+                # Only update if we don't have content yet or current content is better
+                if not pdf_content or (current_pdf_content and len(current_pdf_content) > len(pdf_content)):
+                    pdf_content = current_pdf_content
+                    file_id = session['current_file'].get('file_id')
+                    print(f"Using file from session: id={file_id}, content_length={len(pdf_content) if pdf_content else 0}")
+
+        # Get chat history from Firestore
+        chat_history = get_chat_history(user_id, 'study')        # Add file context to user message if needed
+        enhanced_user_message = user_message
+        if pdf_content and ('current_file' in session):
+            filename = session['current_file'].get('filename', 'document.pdf')
+            file_context = f"I'm asking about the document I uploaded titled: '{filename}'. Please answer using the content of this document."
+            enhanced_user_message = f"{file_context}\n\n{user_message}"
+
+        # Save the user message to Firestore
+        save_chat_message(user_id, 'study', user_message, 'user')
+
+        # --- Memory: Extract and save facts if user shares them ---
+        import re
+
+        # Trigger words for memory extraction
+        trigger_patterns = [
+            r"i like ([\w\s'\-]+)",
+            r"my favorite ([\w\s'\-]+) is ([\w\s'\-]+)",
+            r"i love ([\w\s'\-]+)",
+            r"i did ([\w\s'\-]+)",
+            r"i went to ([\w\s'\-]+)",
+            r"i go to ([\w\s'\-]+)",
+            r"i watch ([\w\s'\-]+)",
+            r"i made ([\w\s'\-]+)",
+            r"i build ([\w\s'\-]+)",
+            r"i built ([\w\s'\-]+)",
+            r"i enjoy ([\w\s'\-]+)",
+            r"my ([\w\s'\-]+) is ([\w\s'\-]+)",
+            r"call me ([\w\s'\-]+)"
+        ]
+
+        # Check for memory patterns in user message and save to memory
+        for pattern in trigger_patterns:
+            matches = re.findall(pattern, user_message.lower())
+            if (matches):
+                # Extract and save facts to memory
+                pass
+
+        # Debug: print what is being saved
+        print(f"[MEMORY SAVE] user_id={user_id} | extracted_facts={matches if ('matches' in locals() and matches) else 'None'} | message='{user_message}'")
+
+        # Extract any command from the text
+        command_regex = r"^\/(\w+)(?:\s+(.*))?$"
+        command_match = re.match(command_regex, user_message)
+        command = None
+        if command_match:
+            command = {
+                'type': command_match.group(1).lower(),
+                'text': command_match.group(2) or ''
+            }
+
+        # For simple case where we can use traditional methods
+        if (command and command.get('type')):
+            command_type = command.get('type')
+            command_text = command.get('text', '')
+
+            # Check for special PDF proofreading/processing requests
+            pdf_reference_terms = ["pdf", "document", "file", "attached", "attachment"]
+            is_pdf_reference = (any((term in command_text.lower()) for term in pdf_reference_terms) or (command_text.strip() == ""))
+
+            # Use traditional approach for commands
+            memory_facts = []
+            if (user_id):
+                # Load memory facts
+                pass
+            memory_context = '\n'.join(memory_facts)
+
+            # Format chat history for the model API using the updated function
+            formatted_history = format_chat_history_for_api(chat_history)
+
+            # Process with traditional approach
+            # Handle different command types
+            if (command_type == 'proofread'):
+                # Handle proofread command
+                system_prompt = """
+                You are a professional proofreader and editor. Your task is to:
+                1. Fix any spelling errors, grammatical mistakes, or typos
+                2. Improve sentence structure for clarity
+                3. Enhance word choice where appropriate
+                4. Fix punctuation and formatting issues
+                
+                Return the corrected text along with a brief explanation of changes made.
+                """
+                
+                if (is_pdf_reference and pdf_content):
+                    enhanced_prompt = f"Please proofread and improve the following document: \n\n{pdf_content}"
+                else:
+                    enhanced_prompt = f"Please proofread and improve the following text: \n\n{command_text}"
+                
+                response = get_ai_response(enhanced_prompt, formatted_history, system_prompt, g.current_language)
+                formatted_response = f"<div class='proofread-result'><h5>Proofreading Results</h5>{response}</div>"
+            
+            elif (command_type == 'summarize'):
+                system_prompt = """
+                You are a professional summarizer. Your task is to:
+                1. Read the content thoroughly 
+                2. Extract the main points, key arguments, and conclusions
+                3. Create a concise and comprehensive summary
+                4. Maintain the original meaning and intent
+                
+                Provide the summary in a well-structured format with bullet points for key takeaways.
+                """
+                
+                if (is_pdf_reference and pdf_content):
+                    enhanced_prompt = f"Please summarize the following document: \n\n{pdf_content}"
+                else:
+                    enhanced_prompt = f"Please summarize the following text: \n\n{command_text}"
+                
+                response = get_ai_response(enhanced_prompt, formatted_history, system_prompt, g.current_language)
+                formatted_response = f"<div class='summary-result'><h5>Summary Results</h5>{response}</div>"
+                
+            # Add other command types as needed...
+            else:
+                # Default to study assistance
+                system_prompt = """
+                You are a study assistant AI specialized in education and learning.
+                Your goal is to provide clear, educational responses that help the user understand concepts.
+                When explaining difficult topics:
+                - Break them down into simpler components
+                - Use examples and analogies where appropriate
+                - Connect new information to concepts the user likely already understands
+                - Encourage critical thinking rather than giving direct answers to homework questions
+                """
+                
+                enhanced_prompt = enhanced_user_message  # Use the enhanced message with file context
+                if (memory_context):
+                    enhanced_prompt = f"{memory_context}\n\n{enhanced_prompt}"
+                
+                response = get_ai_response(enhanced_prompt, formatted_history, system_prompt, g.current_language)
+                formatted_response = "<p>" + response.replace("\n", "<br>") + "</p>"
+        else:
+            # USE MCP FOR NORMAL CHAT INTERACTIONS
+            from mcp.model_adapter import MCPModelFactory
+            from agents.utils import create_mcp_context_from_inputs, extract_metrics_from_mcp_response
+
+            # Initialize MCP context
+            context_type = "study"
+
+            # Get file name if available
+            filename = None
+            if 'current_file' in session and pdf_content:
+                filename = session['current_file'].get('filename')            # Create MCP context from inputs, including file content
+            mcp_context = create_mcp_context_from_inputs(
+                user_input=user_message,
+                user_id=user_id,
+                session_id=session_id,
+                document_text=pdf_content,  # The PDF content will be properly included here
+                chat_history=chat_history,
+                context_type=context_type
+            )
+            
+            # Add a system instruction to emphasize using the document content in responses
+            if pdf_content:
+                mcp_context.add_system_instruction(
+                    "This conversation includes an uploaded document. When the user asks about the document or its contents, " +
+                    "you MUST reference and use information from the document in your response. " +
+                    "The document text has been provided in the context."
+                )            # If file is present, add explicit metadata to help MCP understand the context better
+            if 'current_file' in session and pdf_content:
+                from mcp.context import ContextType, ContextMetadata
+
+                # Add file metadata to the context
+                file_metadata = {
+                    "filename": session['current_file'].get('filename', 'document.pdf'),
+                    "file_id": session['current_file'].get('file_id', ''),
+                    "file_type": os.path.splitext(session['current_file'].get('filename', ''))[1][1:].lower() or 'pdf',
+                    "has_content": bool(pdf_content),
+                    "content_length": len(pdf_content) if pdf_content else 0
+                }
+
+                # Use the correct ContextType with more explicit instructions about using the document content
+                file_context_message = {
+                    "file_context": f"The user has uploaded a document named '{file_metadata['filename']}'. " +
+                                   f"The content of this document has been included in the conversation context. " +
+                                   f"When the user asks about 'the file' or 'the document', they are referring to this document. " +
+                                   f"IMPORTANT: You must reference the document content when responding to questions about it.",
+                    "response_requirements": "When the user asks about the document, make sure to extract and use relevant information from the document in your response. " +
+                                            "If the user asks for information that may be contained in the document, check the document content first.",
+                    "file_metadata": file_metadata                        
+                }
+
+                # Create and add the element with high importance to ensure it's prioritized
+                mcp_context.add_element(
+                    content=file_context_message,
+                    type_=ContextType.USER_MEMORY,  # Use USER_MEMORY which is a valid ContextType
+                    metadata=ContextMetadata(source="file_upload", importance=10)
+                )
+
+            # Get model adapter
+            model_adapter = MCPModelFactory.create(model_name="gemini")
+
+            # Generate response using MCP
+            response_obj = await model_adapter.generate_with_context(enhanced_user_message, mcp_context)
+            response = response_obj.text
+
+            # Format the response for display
+            formatted_response = "<p>" + response.replace("\n", "<br>") + "</p>"
+
+            # Extract token metrics for usage tracking
+            metrics = extract_metrics_from_mcp_response(response_obj)
+            tokens_used = metrics.get('total_tokens', 0)            # Track token usage
+            track_token_usage_for_api_call(user_id, user_message, response, tokens_used)
+        
+        # Save assistant response to Firestore
+        save_chat_message(user_id, 'study', response, 'assistant')
+          
+        # Make sure to check if current_file exists in session and has content
+        has_file = bool((pdf_content and 'current_file' in session) or ('current_file' in session and session['current_file'].get('content')))
+        
+        # Final verification of session state before returning response
+        final_state = verify_session_state("study_chat_end")
+        print(f"[FINAL SESSION] hasFile = {has_file}, content available: {bool(pdf_content)}")
+        
+        if has_file:
+            print(f"[FINAL SESSION] Filename: {session.get('current_file', {}).get('filename')}")
+            print(f"[FINAL SESSION] File ID: {session.get('current_file', {}).get('file_id')}")
+            print(f"[FINAL SESSION] Content length: {len(session.get('current_file').get('content', ''))}")
+        
+        return jsonify({
+            'response': formatted_response,
+            'hasFile': has_file,
+            'fileName': session.get('current_file', {}).get('filename') if has_file else None,
+            'fileId': session.get('current_file', {}).get('file_id') if has_file else None
+        })
+    except Exception as e:
+        print(f"Error in study chat: {e}")
+        import traceback
+        traceback.print_exc()
+        error_message = "Sorry, I encountered an error processing your request. Please try again."
+
+        # Try to save the error to Firestore to help with debugging
+        try:
+            save_chat_message(user_id, 'study', f"ERROR: {str(e)}", 'system')
+        except:
+            pass
+        return jsonify({'response': f"<p>{error_message}</p>"})
+@app.route('/study/upload', methods=['POST'])
+@login_required
+def study_upload():
+    # Verify session state before processing upload
+    before_state = verify_session_state("pre_upload")
+    
+    # Double check that the user is properly authenticated
+    if not session.get('user_id'):
+        # Clear any invalid session data
+        session.clear()
+        return jsonify({
+            'error': 'authentication_required'
+        }), 401
+    
+    if ('file' not in request.files):
+        return jsonify({'error': 'No file part'}), 400
+        
+    file = request.files['file']
+    print(f"[UPLOAD DEBUG] Received upload request for file: {file.filename}")
+    print(f"[SESSION CONFIG] Session implementation: {app.session_interface.__class__.__name__}")
+    
+    if (file.filename == ''):
+        return jsonify({'error': 'No selected file'}), 400
+        
+    if (file):
+        try:
+
+            # Save the uploaded file
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+            
+            print(f"[UPLOAD DEBUG] File saved to: {file_path}")
+            print(f"[UPLOAD DEBUG] File exists: {os.path.exists(file_path)}")
+            print(f"[UPLOAD DEBUG] File size: {os.path.getsize(file_path)} bytes")
+
+            # Extract text from the file
+            print(f"[UPLOAD DEBUG] Starting text extraction from file: {filename}")
+            text = extract_text_from_file(file_path)
+            
+            if (not text):
+                print(f"[UPLOAD DEBUG] Failed to extract text from file: {filename}")
+                return jsonify({'error': 'Could not extract text from the file'}), 400
+            
+            text_length = len(text) if text else 0
+            print(f"[UPLOAD DEBUG] Successfully extracted text, length: {text_length} characters")
+            print(f"[UPLOAD DEBUG] Text sample (first 100 chars): {text[:100] if text else 'EMPTY'}")
+            
+            # Check if this will be stored to Firebase/session
+            user_id = session.get('user_id')
+            print(f"[UPLOAD DEBUG] User ID from session: {user_id}")
+            
+            # Store in current_file session variable to enable context in future conversations
+            if text:
+                print(f"[UPLOAD DEBUG] Storing file content in session, length: {len(text)} characters")
+                
+                # Generate a random file ID if we don't have one
+                file_id = str(uuid.uuid4())
+                
+                # Store in session                # Save session state before update for comparison
+                before_session = session.get('current_file', {})
+                before_keys = list(before_session.keys()) if before_session else []
+                  # Using convert_to_serializable that was imported at the top of the file
+                # No need to redefine or import the function here
+                
+                # Create file metadata with proper serialization
+                session['current_file'] = {
+                    'file_id': file_id,
+                    'filename': filename,
+                    'content': text,
+                    'upload_time': datetime.now().strftime('%Y-%m-%d %H:%M:%S')
+                }
+                session.modified = True
+                
+                # Force session save by accessing it again
+                print(f"[UPLOAD DEBUG] Session updated with file: {filename}, ID: {file_id}")
+                print(f"[UPLOAD DEBUG] Verify content in session: {len(session['current_file']['content'])} characters")
+                print(f"[UPLOAD DEBUG] Session content first 50 chars: {session['current_file']['content'][:50]}")
+                
+                # Verify session persistence by checking if the data was properly saved
+                print(f"[SESSION PERSISTENCE] Before update - keys: {before_keys}")
+                print(f"[SESSION PERSISTENCE] After update - keys: {list(session['current_file'].keys())}")
+                print(f"[SESSION PERSISTENCE] Session implementation: {app.session_interface.__class__.__name__}")
+                  # Double check session storage
+                file_content_len = len(session['current_file']['content'])
+                session_id = request.cookies.get('session', 'no-session-cookie')
+                print(f"[SESSION PERSISTENCE] Content length in session: {file_content_len} bytes")
+                print(f"[SESSION PERSISTENCE] Session cookie exists: {'session' in request.cookies}")
+                print(f"[SESSION PERSISTENCE] Session ID: {session_id[:10]}... (truncated)")
+                
+                # Final verification after session update
+                after_state = verify_session_state("post_upload")
+                
+                # Log the differences between before and after states
+                print(f"[SESSION COMPARE] Content before: {before_state.get('content_length', 0)}, after: {after_state.get('content_length', 0)}")
+                print(f"[SESSION COMPARE] File ID before: {before_state.get('file_id', 'None')}, after: {after_state.get('file_id', 'None')}")
+                print(f"[SESSION COMPARE] Filename before: {before_state.get('filename', 'None')}, after: {after_state.get('filename', 'None')}")
+            
+            return jsonify({
+                'success': True,
+                'filename': filename,
+                'content': text,
+                'message': 'File processed successfully'
+            })
+            
+        except Exception as e:
+            print(f"[UPLOAD DEBUG] Global error in file processing: {e}")
+            return jsonify({'error': f'Error processing file: {str(e)}'}), 500
+    
+    return jsonify({'error': 'Invalid file'}), 400
+
+# Proofreading Routes
+@app.route('/proofread/upload', methods=['POST'])
+@login_required
+def proofread_upload():
+    # Double check that the user is properly authenticated
+    if not session.get('user_id'):
+        # Clear any invalid session data
+        session.clear()
+        return jsonify({
+            'error': 'authentication_required'
+        }), 401
+        
+    if ('file' not in request.files):
+        return jsonify({'error': 'No file part'}), 400
+        
+    file = request.files['file']
+    
+    if (file.filename == ''):
+        return jsonify({'error': 'No selected file'}), 400
+        
+    if (file):
+        try:
+
+            # Save the uploaded file
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+            
+            print(f"File saved to: {file_path}")
+            print(f"File exists: {os.path.exists(file_path)}")
+            print(f"File size: {os.path.getsize(file_path)} bytes")
+
+            # Extract text from the file
+            text = extract_text_from_file(file_path)
+            
+            if (not text):
+                return jsonify({'error': 'Could not extract text from the file'}), 400
+            
+            print(f"Successfully extracted text, length: {len(text)} characters")
+
+            # Get AI to proofread the text
+
+            # Limit text size to avoid token limits
+            text_to_process = (text[:4000] if (len(text) > 4000) else text)
+            
+            prompt = f"""
+            You are a professional proofreader and editor. Please carefully proofread the following text and identify ANY errors or improvements, no matter how small.
+
+            Look for:
+            - Spelling errors
+            - Grammar mistakes
+            - Punctuation issues
+            - Awkward phrasing
+            - Run-on sentences
+            - Inconsistencies
+
+            Even if the text seems mostly correct, examine it critically and find areas for improvement.
+            
+            Text to proofread:
+            {text_to_process}
+
+            Format your response as a JSON with the following structure:
+            {{
+                "corrected_text": "The full corrected text with all errors fixed",
+                "corrections": [
+                    {{
+                        "original": "original text with error",
+                        "corrected": "corrected text",
+                        "explanation": "detailed explanation of why this needed correction"
+                    }}
+                ]
+            }}
+
+            If there are truly no errors at all (which is rare), return an empty list for "corrections".
+            """
+            
+            response = get_ai_response(prompt)
+            print(f"AI proofreading response received, length: {len(response)} characters")
+            
+            try:
+
+                # Try to parse as JSON, but handle if it's not valid JSON
+                json_start = response.find('{')
+                json_end = (response.rfind('}') + 1)
+                if ((json_start >= 0) and (json_end > json_start)):
+                    json_str = response[json_start:json_end]
+                    result = json.loads(json_str)
+
+                    # Make sure corrections is a list, even if empty
+                    if ("corrections" not in result):
+                        result["corrections"] = []
+
+                    # If no corrections found but texts differ, create a fallback correction
+                    if ((len(result["corrections"]) == 0) and (result["corrected_text"] != text_to_process)):
+                        result["corrections"] = [{
+                            "original": "Original text",
+                            "corrected": "Corrected text",
+                            "explanation": "The text contained errors that have been corrected."
+                        }]
+                        
+                else:
+
+                    # Fall back to parsing the response manually
+                    corrected_text = text  # Default to original text
+                    corrections = []
+                    
+                    lines = response.split('\n')
+                    for i, line in enumerate(lines):
+                        if (("original:" in line.lower()) and ((i + 1) < len(lines)) and ("corrected:" in lines[(i + 1)].lower())):
+                            original = line.split(":", 1)[1].strip()
+                            corrected = lines[(i + 1)].split(":", 1)[1].strip()
+                            explanation = ""
+                            if (((i + 2) < len(lines)) and ("explanation:" in lines[(i + 2)].lower())):
+                                explanation = lines[(i + 2)].split(":", 1)[1].strip()
+                            
+                            corrections.append({
+                                "original": original,
+                                "corrected": corrected,
+                                "explanation": explanation
+                            })
+                    
+                    result = {
+                        "corrected_text": corrected_text,
+                        "corrections": corrections
+                    }
+            except Exception as e:
+                print(f"Error parsing JSON response: {e}")
+                print(f"Response content: {response[:500]}...")
+
+                # Create a basic structure if parsing fails
+                result = {
+                    "corrected_text": text,
+                    "corrections": [{
+                        "original": "Error parsing response",
+                        "corrected": "Please try again",
+                        "explanation": str(e)
+                    }]
+                }
+            
+            try:
+
+                # Generate PDF with corrected text
+                pdf_path = create_proofread_pdf(result["corrected_text"], result["corrections"], file_path)
+                print(f"PDF created at: {pdf_path}")
+
+                # Generate a unique filename for the PDF
+                pdf_filename = f"{os.path.splitext(filename)[0]}_{uuid.uuid4().hex[:8]}_corrected.pdf"
+                final_pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+
+                # Copy the PDF to the uploads directory
+                import shutil
+                shutil.copy2(pdf_path, final_pdf_path)
+                print(f"PDF copied to: {final_pdf_path}")
+                print(f"PDF exists at destination: {os.path.exists(final_pdf_path)}")
+
+                # Make sure the upload folder has proper permissions (for Render deployment)
+                if (os.environ.get('RENDER')):
+                    os.chmod(final_pdf_path, 0o644)  # Read/write for owner, read for others
+                    print(f"Set permissions on PDF file")
+
+                # Create a URL for the PDF
+                pdf_url = url_for('download_file', filename=pdf_filename, _external=True)
+                
+                return jsonify({
+                    'pdf_url': pdf_url,
+                    'corrections': result["corrections"]
+                })
+            except Exception as e:
+                print(f"Error generating or saving PDF: {e}")
+                return jsonify({'error': f'Error generating PDF: {str(e)}'}), 500
+        except Exception as e:
+            print(f"Global error in file processing: {e}")
+            return jsonify({'error': f'Error processing file: {str(e)}'}), 500
+    
+    return jsonify({'error': 'Invalid file'}), 400
+
+# New route: proofread text input
+@app.route('/proofread/text', methods=['POST'])
+@login_required
+async def proofread_text():
+    # Double check that the user is properly authenticated
+    if not session.get('user_id'):
+        # Clear any invalid session data
+        session.clear()
+        return jsonify({
+            'response': "<p>You need to be logged in to use the chat. Please login first.</p>",
+            'error': 'authentication_required'
+        }), 401
+        
+    data = (request.get_json() or {})
+    text = data.get('text', '').strip()
+    user_id = session.get('user_id')
+    session_id = (data.get('sessionId') or str(int((time.time() * 1000))))
+    
+    if (not text):
+        return jsonify({'error': 'No text provided'}), 400
+        
+    try:
+
+        # Check token limits
+        can_use, remaining_tokens = check_user_token_limit(user_id)
+        if (not can_use):
+            return jsonify({
+                'error': 'Token limit exceeded',
+                'message': "You've reached your daily token limit. Please try again tomorrow or upgrade to premium for a higher limit."
+            }), 429
+
+        # Limit length for tokens
+        text_to_process = (text[:4000] if (len(text) > 4000) else text)
+
+        # USE MCP FOR PROOFREADING
+        from mcp.model_adapter import MCPModelFactory
+        from agents.utils import create_mcp_context_from_inputs, extract_metrics_from_mcp_response
+        from mcp.context import ContextType, ContextMetadata
+
+        # Create MCP context
+        mcp_context = create_mcp_context_from_inputs(
+            user_input=text_to_process,
+            user_id=user_id,
+            session_id=session_id,
+            context_type="proofread"
+        )
+
+        # Add specific proofreading instructions
+        mcp_context.add_system_instruction(
+            """
+            You are a professional proofreader and editor. Please carefully proofread the following text and identify ANY errors or improvements.
+            Look for:
+            - Spelling errors
+            - Grammar mistakes
+            - Punctuation issues
+            - Awkward phrasing
+            - Run-on sentences
+            - Inconsistencies
+            
+            Format your response as a JSON with the following structure:
+            {
+                "corrected_text": "The full corrected text with all errors fixed",
+                "corrections": [
+                    {
+                        "original": "original text with error",
+                        "corrected": "corrected text",
+                        "explanation": "detailed explanation of why this needed correction"
+                    }
+                ]
+            }
+            
+            If there are truly no errors at all (which is rare), return an empty list for "corrections".
+            """
+        )
+
+        # Get model adapter
+        model_adapter = MCPModelFactory.create(model_name="gemini")
+
+        # Generate response
+        response_obj = await model_adapter.generate_with_context("Please proofread this text", mcp_context)
+        response = response_obj.text
+
+        # Extract metrics for usage tracking
+        metrics = extract_metrics_from_mcp_response(response_obj)
+        tokens_used = metrics.get('total_tokens', 0)
+
+        # Track token usage
+        track_token_usage_for_api_call(user_id, "Proofread text", response, tokens_used)
+
+        # Parse JSON from AI response
+        json_start = response.find('{')
+        json_end = (response.rfind('}') + 1)
+        result = {'corrected_text': text_to_process, 'corrections': []}
+        
+        if ((json_start >= 0) and (json_end > json_start)):
+            try:
+                import json
+                json_str = response[json_start:json_end]
+                result = json.loads(json_str)
+            except Exception as json_error:
+                print(f"Error parsing JSON from AI response: {json_error}")
+
+        # Prepare a temporary original file for PDF header
+        temp_txt = os.path.join(tempfile.gettempdir(), f"text_{uuid.uuid4().hex}.txt")
+        with open(temp_txt, 'w', encoding='utf-8') as f:
+            f.write(text_to_process)
+
+        # Generate PDF
+        pdf_path = create_proofread_pdf(result['corrected_text'], result['corrections'], temp_txt)
+
+        # Copy PDF to uploads
+        pdf_filename = f"text_{uuid.uuid4().hex}_corrected.pdf"
+        final_pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+        shutil.copy2(pdf_path, final_pdf_path)
+
+        # Build URL for download
+        if (os.environ.get('RENDER')):
+            domain = os.environ.get('RENDER_EXTERNAL_URL', request.host_url.rstrip('/'))
+            pdf_url = f"{domain}/download/{pdf_filename}"
+        else:
+            pdf_url = url_for('download_file', filename=pdf_filename, _external=True)
+            
+        return jsonify({'pdf_url': pdf_url, 'corrections': result['corrections']})
+    except Exception as e:
+        print(f"Error in proofread_text: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Feedback feature routes
+@app.route('/feedback', methods=['GET', 'POST'])
+@login_required
+def feedback():
+
+    # Import the Firestore client
+    from firebase_admin import firestore
+    db = firestore.client()
+
+    # Handle HTML form submission
+    if ((request.method == 'POST') and ('feedback' in request.form)):
+        text = request.form.get('feedback', '').strip()
+        if (not text):
+            flash('Please enter feedback text', 'warning')
+            return redirect(url_for('feedback'))
+        try:
+
+            # Save feedback to Firestore
+            user_id = session.get('user_id')
+            feedback_data = {
+                'text': text,
+                'user_id': user_id,
+                'user_email': session.get('user_email'),
+                'timestamp': firestore.SERVER_TIMESTAMP
+            }
+            db.collection('feedback').add(feedback_data)
+            flash('Thank you for your feedback!', 'success')
+        except Exception as e:
+            print(f"Error saving feedback: {str(e)}")
+            flash('Sorry, there was an error saving your feedback', 'danger')
+        return redirect(url_for('feedback'))
+
+    # Handle JSON API submission
+    if (request.method == 'POST'):
+        data = (request.get_json() or {})
+        text = data.get('feedback', '').strip()
+        if (not text):
+            return jsonify({'error': 'No feedback text provided'}), 400
+        try:
+
+            # Save feedback to Firestore
+            user_id = session.get('user_id')
+            feedback_data = {
+                'text': text,
+                'user_id': user_id,
+                'user_email': session.get('user_email'),
+                'timestamp': firestore.SERVER_TIMESTAMP
+            }
+            db.collection('feedback').add(feedback_data)
+            return jsonify({'success': True})
+        except Exception as e:
+            print(f"Error saving feedback: {str(e)}")
+            return jsonify({'error': str(e)}), 500
+    return render_template('feedback.html', active_page='feedback')
+
+@app.route('/entertainment/chat', methods=['POST'])
+@login_required
+async def entertainment_chat():
+    # Double check that the user is properly authenticated
+    if not session.get('user_id'):
+        # Clear any invalid session data
+        session.clear()
+        return jsonify({
+            'response': "<p>You need to be logged in to use the chat. Please login first.</p>",
+            'error': 'authentication_required'
+        }), 401
+
+    data = request.json
+    user_message = data.get('message', '')
+    category = data.get('category', 'all')
+    user_id = session.get('user_id')
+    session_id = (data.get('sessionId') or str(int((time.time() * 1000))))
+    formatted_response = "<p>Response processing error</p>"  # Default value in case of errors
+
+    try:
+
+        # Get the Firestore db client
+        from firebase_admin import firestore
+        db = firestore.client()
+
+        # Check if user has exceeded their token limit
+        can_use, remaining_tokens = check_user_token_limit(user_id)
+        
+        if (not can_use):
+            return jsonify({
+                'response': "<p>You've reached your daily token limit. Please try again tomorrow or upgrade to premium for a higher limit.</p>",
+                'error': 'token_limit_exceeded',
+                'suggestions': []
+            })
+
+        # Import the chat history functions
+        from firebase_utils import get_chat_history, save_chat_message, format_chat_history_for_api
+
+        # Get chat history from Firestore
+        chat_history = get_chat_history(user_id, 'entertainment')
+
+        # Save the user message to Firestore
+        save_chat_message(user_id, 'entertainment', user_message, 'user')
+
+        # --- Memory: Extract and save facts if user shares them ---
+        import re
+
+        # Trigger words for memory extraction
+        trigger_patterns = [
+            r"i like ([\w\s'\-]+)",
+            r"my favorite ([\w\s'\-]+) is ([\w\s'\-]+)",
+            r"i love ([\w\s'\-]+)",
+            r"i did ([\w\s'\-]+)",
+            r"i went to ([\w\s'\-]+)",
+            r"i go to ([\w\s'\-]+)",
+            r"i watch ([\w\s'\-]+)",
+            r"i made ([\w\s'\-]+)",
+            r"i build ([\w\s'\-]+)",
+            r"i built ([\w\s'\-]+)",
+            r"i enjoy ([\w\s'\-]+)",
+            r"my ([\w\s'\-]+) is ([\w\s'\-]+)",
+            r"call me ([\w\s'\-]+)"
+        ]
+
+        # Check for memory patterns in user message and save to memory
+        for pattern in trigger_patterns:
+            matches = re.findall(pattern, user_message.lower())
+            if (matches):
+                for match in matches:
+                    if (isinstance(match, tuple)):
+                        key = f"{match[0].strip()}"
+                        value = f"{match[1].strip()}"
+                    else:
+                        key = "preferences"
+                        value = match.strip()
+                    
+                    update_user_memory(user_id, key, value)
+
+        # USE MCP FOR ENTERTAINMENT CHAT
+        from mcp.model_adapter import MCPModelFactory
+        from agents.utils import create_mcp_context_from_inputs, extract_metrics_from_mcp_response
+
+        # Initialize MCP context
+        mcp_context = create_mcp_context_from_inputs(
+            user_input=user_message,
+            user_id=user_id,
+            session_id=session_id,
+            chat_history=chat_history,
+            context_type="entertainment"
+        )
+
+        # Add category information to context
+        category_descriptions = {
+            'all': "entertainment topics including movies, TV shows, video games, music, and books",
+            'movies': "movies, film directors, actors, cinema history, and film recommendations",
+            'tvshows': "TV shows, series, episodes, streaming platforms, and television recommendations",
+            'videogames': "video games, gaming platforms, game developers, and game recommendations",
+            'music': "music, artists, albums, songs, genres, and music recommendations",
+            'books': "books, authors, genres, literature, and book recommendations"
+        }
+
+        # Add category as context element
+        from mcp.context import ContextType, ContextMetadata
+        mcp_context.add_element(
+            content={"category": category, "description": category_descriptions.get(category, category_descriptions['all'])},
+            type_=ContextType.TOOL_RESULT,
+            metadata=ContextMetadata(source="category_selection", importance=8)
+        )
+
+        # Add entertainment-specific system instruction
+        mcp_context.add_system_instruction(
+            f"""
+            You are a super friendly, casual, and funny entertainment assistant specialized in {category_descriptions.get(category, category_descriptions['all'])}.
+            Use humor, emojis, and pop culture references where appropriate. 
+            Make the user smile, throw in a joke or a playful comment now and then, and keep the conversation light and fun.
+            If the user shares their favorites or personal facts, remember and reference them in a playful way. 
+            If you recommend something, make it sound exciting or silly.
+            IMPORTANT: If the user asks about their favorites, preferences, or any personal fact (e.g., 'what is my favorite X?', 'what do I like?', 'what is my Y?'), 
+            always answer using the facts you know from previous conversations. If you do not know, say you don't know yet and ask them to share!
+            """
+        )
+
+        # Get model adapter
+        model_adapter = MCPModelFactory.create(model_name="gemini")
+
+        # Generate response
+        response_obj = await model_adapter.generate_with_context(user_message, mcp_context)
+        response = response_obj.text
+
+        # Format the response for display
+        formatted_response = "<p>" + response.replace("\n", "<br>") + "</p>"
+
+        # Extract metrics for usage tracking
+        metrics = extract_metrics_from_mcp_response(response_obj)
+        tokens_used = metrics.get('total_tokens', 0)
+
+        # Track token usage
+        track_token_usage_for_api_call(user_id, user_message, response, tokens_used)
+
+        # Save assistant response to Firestore
+        save_chat_message(user_id, 'entertainment', response, 'assistant')
+
+        # Generate suggestions
+
+        # Create a simple MCP context for suggestions
+        suggestion_context = create_mcp_context_from_inputs(
+            user_input=f"Given our conversation about {category_descriptions.get(category, 'entertainment')} where I asked: '{user_message}' and you responded with: '{response}', suggest 3-4 short follow-up questions I might be interested in.",
+            context_type="entertainment"
+        )
+
+        suggestion_context.add_system_instruction(
+            "Generate 3-4 short follow-up questions or topics the user might be interested in discussing next. "
+            "Each suggestion should be no more than 10 words. Return only the list of suggestions, one per line."
+        )
+
+        # Get suggestions
+        suggestions_response = await model_adapter.generate_with_context(
+            "Generate follow-up questions", suggestion_context
+        )
+
+        suggestions = [s.strip() for s in suggestions_response.text.split('\n') if s.strip()]
+
+        # Track token usage for suggestions
+        suggestion_metrics = extract_metrics_from_mcp_response(suggestions_response)
+        track_token_usage_for_api_call(user_id, "Generate suggestions", suggestions_response.text, 
+                                       suggestion_metrics.get('total_tokens', 0))
+
+        return jsonify({
+            'response': formatted_response,
+            'suggestions': suggestions[:4]
+        })
+    except Exception as e:
+        print(f"Error in entertainment chat: {e}")
+        error_message = "Sorry, I encountered an error processing your request. Please try again."
+
+        # Try to save the error to Firestore to help with debugging
+        try:
+            save_chat_message(user_id, 'entertainment', f"ERROR: {str(e)}", 'system')
+        except:
+            pass
+        return jsonify({'response': f"<p>{error_message}</p>", 'suggestions': []})
+
+# Helper route to serve generated PDFs
+@app.route('/download/<filename>')
+def download_file(filename):
+    """
+    Serve a file for download from the uploads folder
+    """
+    try:
+        # Log the request for debugging
+        print(f"Download request received for file: {filename}")
+        
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        print(f"Looking for file at primary path: {file_path}")
+        print(f"File exists at primary path: {os.path.exists(file_path)}")
+        
+        if (not os.path.exists(file_path)):
+            print(f"File not found at primary path: {file_path}")
+
+            # Try alternative paths with better logging
+            alt_paths = [
+                os.path.join(tempfile.gettempdir(), filename),
+                os.path.join(os.getcwd(), 'uploads', filename),
+                os.path.join('/opt/render/project/src/uploads', filename)
+            ]
+            
+            print(f"Searching alternative paths for {filename}...")
+            for alt_path in alt_paths:
+                print(f"Checking alternative path: {alt_path}")
+                if (os.path.exists(alt_path)):
+                    file_path = alt_path
+                    print(f"Found file at alternate location: {file_path}")
+                    break                
+                else:                    
+                    print(f"File not found at alternative path: {alt_path}")
+        
+        print(f"Final file path being used: {file_path}")
+        print(f"File exists at final path: {os.path.exists(file_path)}")
+                    
+        if (os.path.exists(file_path)):
+            try:
+                print(f"Serving file: {file_path} with filename: {filename}")
+                return send_file(file_path, as_attachment=True, download_name=filename)
+            except TypeError:
+                # Fallback for older Flask versions
+                print(f"Using fallback method to serve: {file_path}")
+                return send_file(file_path, as_attachment=True, attachment_filename=filename)
+            except Exception as e:
+                print(f"Unexpected error serving file: {str(e)}")
+                return jsonify({'error': f'Error serving file: {str(e)}'}), 500
+        else:
+            print(f"File not found at any location: {filename}")
+            return jsonify({'error': 'File not found'}), 404
+    except Exception as e:
+        print(f"Error serving file {filename}: {str(e)}")
+        return jsonify({'error': f'Error downloading file: {str(e)}'}), 500
+
+# Utility functions
+from file_utils import extract_text_from_file
+
+def create_proofread_pdf(corrected_text, corrections, original_file_path):
+    """Create a PDF with the corrected text and list of corrections"""
+
+    # Generate a temporary file path
+    output_path = os.path.join(tempfile.gettempdir(), f"corrected_{uuid.uuid4()}.pdf")
+
+    # Create PDF
+    c = canvas.Canvas(output_path, pagesize=letter)
+    width, height = letter
+
+    # Add header
+    c.setFont("Helvetica-Bold", 16)
+    c.drawString(50, (height - 50), "Proofread Document")
+
+    # Add timestamp
+    c.setFont("Helvetica", 10)
+    timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
+    c.drawString(50, (height - 70), f"Generated on: {timestamp}")
+
+    # Add original filename
+    c.drawString(50, (height - 90), f"Original file: {os.path.basename(original_file_path)}")
+
+    # Add corrected text
+    c.setFont("Helvetica-Bold", 12)
+    c.drawString(50, (height - 120), "Corrected Text:")
+
+    # Split text into lines that fit on the page
+    c.setFont("Helvetica", 10)
+    text_lines = []
+    y_position = (height - 140)
+
+    # Wrap text to fit on page
+    for paragraph in corrected_text.split('\n'):
+        words = paragraph.split()
+        current_line = ""
+        
+        for word in words:
+            test_line = ((current_line + " " + word) if current_line else word)
+            if (c.stringWidth(test_line, "Helvetica", 10) < (width - 100)):
+                current_line = test_line
+            else:
+                text_lines.append(current_line)
+                current_line = word
+        
+        if (current_line):
+            text_lines.append(current_line)
+        text_lines.append("")  # Add empty line between paragraphs
+
+    # Draw text, starting new pages as needed
+    for line in text_lines:
+        if (y_position < 100):
+            c.showPage()
+            y_position = (height - 50)
+            c.setFont("Helvetica", 10)
+        
+        c.drawString(50, y_position, line)
+        y_position -= 15
+
+    # Add corrections list on a new page
+    c.showPage()
+    c.setFont("Helvetica-Bold", 14)
+    c.drawString(50, (height - 50), "Summary of Corrections:")
+    
+    y_position = (height - 80)
+    c.setFont("Helvetica", 10)
+
+    for i, correction in enumerate(corrections):
+
+        # Check if we need a new page
+        if (y_position < 100):
+            c.showPage()
+            y_position = (height - 50)
+            c.setFont("Helvetica-Bold", 14)
+            c.drawString(50, y_position, "Summary of Corrections (continued):")
+            y_position -= 30
+            c.setFont("Helvetica", 10)
+
+        # Draw correction details
+        c.setFont("Helvetica-Bold", 10)
+        c.drawString(50, y_position, f"Correction {i+1}:")
+        y_position -= 20
+
+        c.setFont("Helvetica", 10)
+        c.setFillColorRGB(0.8, 0, 0)  # Red for original
+        c.drawString(60, y_position, f"Original: {correction['original'][:80]}") 
+        y_position -= 15
+
+        c.setFillColorRGB(0, 0.5, 0)  # Green for corrected
+        c.drawString(60, y_position, f"Corrected: {correction['corrected'][:80]}")
+        y_position -= 15
+
+        c.setFillColorRGB(0, 0, 0)  # Black for explanation
+        explanation_lines = split_text_to_lines(correction['explanation'], 80)
+        
+        for line in explanation_lines:
+            c.drawString(60, y_position, f"Explanation: {line}")
+            y_position -= 15
+        
+        y_position -= 10  # Space between corrections
+    
+    c.save()
+    return output_path
+
+def split_text_to_lines(text, max_chars_per_line):
+    """Split text into lines with maximum characters per line"""
+    if (len(text) <= max_chars_per_line):
+        return [text]
+        
+    lines = []
+    current_line = ""
+    
+    for word in text.split():
+        if ((len(current_line) + len(word) + 1) <= max_chars_per_line):
+            current_line += ((" " + word) if current_line else word)
+        else:
+            lines.append(current_line)
+            current_line = word
+    
+    if (current_line):
+        lines.append(current_line)
+        
+    return lines
+
+def chunk_large_text(text, max_chunk_size=4000):
+    """
+    Split large text into smaller chunks for processing.
+    
+    Args:
+        text (str): The text to chunk
+        max_chunk_size (int): Maximum characters per chunk
+        
+    Returns:
+        list: List of text chunks
+    """
+
+    # If text is small enough, return it as is
+    if (len(text) <= max_chunk_size):
+        return [text]
+    
+    chunks = []
+
+    # Try to split on paragraph boundaries first
+    paragraphs = text.split('\n\n')
+    current_chunk = ""
+    
+    for paragraph in paragraphs:
+
+        # If adding this paragraph would exceed the limit, store the current chunk and start a new one
+        if (((len(current_chunk) + len(paragraph) + 2) > max_chunk_size) and current_chunk):
+            chunks.append(current_chunk)
+            current_chunk = paragraph
+        else:
+            if (current_chunk):
+                current_chunk += ('\n\n' + paragraph)
+            else:
+                current_chunk = paragraph
+
+    # Add the last chunk if it's not empty
+    if (current_chunk):
+        chunks.append(current_chunk)
+
+    # If any chunk is still too large, split it further on sentence boundaries
+    for i in range(len(chunks)):
+        if (len(chunks[i]) > max_chunk_size):
+            sentence_chunks = []
+            sentences = re.split(r'(?<=[.!?])\s+', chunks[i])
+            current_chunk = ""
+            
+            for sentence in sentences:
+                if (((len(current_chunk) + len(sentence) + 1) > max_chunk_size) and current_chunk):
+                    sentence_chunks.append(current_chunk)
+                    current_chunk = sentence
+                else:
+                    if (current_chunk):
+                        current_chunk += (' ' + sentence)
+                    else:
+                        current_chunk = sentence
+            
+            if (current_chunk):
+                sentence_chunks.append(current_chunk)
+
+            # Replace the original chunk with sentence-based chunks
+            chunks[i:i+1] = sentence_chunks
+
+    # Final check - if any chunk is still too large, force split it
+    final_chunks = []
+    for chunk in chunks:
+        if (len(chunk) > max_chunk_size):
+
+            # Force split by character count
+            for j in range(0, len(chunk), max_chunk_size):
+                final_chunks.append(chunk[j:j+max_chunk_size])
+        else:
+            final_chunks.append(chunk)
+    
+    return final_chunks
+
+@app.route('/google-login', methods=['POST'])
+def google_login():
+    """Handle Google Authentication via Firebase"""
+    from firebase_auth_utils import handle_google_authentication
+    import logging
+    
+    try:
+        id_token = request.json.get('idToken')
+        referral_code = request.json.get('referralCode')
+        
+        # Enhanced debug logging
+        print("="*50)
+        print(f"Google login request received at: {datetime.now().isoformat()}")
+        print(f"Firebase apps initialized: {len(firebase_admin._apps)}")
+        print(f"Token length: {len(id_token) if id_token else 0}")
+        print(f"Referral code present: {bool(referral_code)}")
+        print("="*50)
+        
+        if not id_token:
+            logging.error("Google login attempt without ID token")
+            return jsonify({'error': 'No authentication token provided'}), 400
+            
+        logging.info(f"Processing Google login request with token (length: {len(id_token) if id_token else 0})")
+        
+        response, status_code = handle_google_authentication(id_token, referral_code)
+        
+        # Log the result
+        print(f"Authentication result: status_code={status_code}")
+        if status_code != 200:
+            response_data = response.get_json()
+            print(f"Authentication error: {response_data.get('error')}")
+            if 'details' in response_data:
+                print(f"Error details: {response_data.get('details')}")
+                
+        return response, status_code
+    except Exception as e:
+        import traceback
+        logging.error(f"Unhandled exception in Google login: {str(e)}")
+        print(f"Exception type: {type(e).__name__}")
+        print(f"Exception details: {str(e)}")
+        print(f"Traceback: {traceback.format_exc()}")
+        return jsonify({'error': 'An unexpected error occurred during login'}), 500
+        
+@app.route('/api/auth-status', methods=['GET'])
+def auth_status():
+    """Endpoint to check the current authentication status of the user"""
+    if 'user_id' in session and session.get('user_id'):
+        # User is authenticated
+        return jsonify({
+            'authenticated': True,
+            'user': {
+                'id': session.get('user_id'),
+                'email': session.get('user_email'),
+                'name': session.get('user_name'),
+                'picture': session.get('user_picture')
+            }
+        })
+    else:
+        # User is not authenticated
+        return jsonify({
+            'authenticated': False
+        })
+
+@app.route('/api/debug/firebase', methods=['GET'])
+def debug_firebase():
+    """Endpoint to check Firebase configuration (admin only)"""
+    if 'user_id' not in session:
+        return jsonify({'error': 'Authentication required'}), 401
+        
+    # Only allow admins to access this endpoint
+    is_admin = False
+    try:
+        from firebase_admin import firestore
+        user_ref = firestore.client().collection('users').document(session['user_id'])
+        user_data = user_ref.get().to_dict()
+        is_admin = user_data.get('is_admin', False) if user_data else False
+    except Exception as e:
+        print(f"Error checking admin status: {e}")
+        
+    if not is_admin:
+        return jsonify({'error': 'Admin access required'}), 403
+    
+    # Run the debug checks
+    from check_firebase import check_firebase_config
+    result = check_firebase_config()
+    
+    return jsonify(result)
+
+@app.route('/api/chat', methods=['POST'])
+@login_required
+def api_chat():
+    """API endpoint for chat that tracks token usage and enforces limits"""
+    # Import asyncio to properly handle async operations in a Flask sync context
+    import asyncio
+    
+    # Double check that the user is properly authenticated
+    if not session.get('user_id'):
+        # Clear any invalid session data
+        session.clear()
+        return jsonify({
+            'response': "<p>You need to be logged in to use the chat. Please login first.</p>",
+            'error': 'authentication_required'
+        }), 401
+    
+    # Function to run async code in a sync context safely
+    def run_async(coro):
+        loop = asyncio.new_event_loop()
+        asyncio.set_event_loop(loop)
+        try:
+            return loop.run_until_complete(coro)
+        finally:
+            loop.close()
+
+    # Initialize default value for this variable in case of errors
+    formatted_response = "<p>Response processing error</p>"
+    response_text = "Response processing error"
+    
+    # Check complete session state for debugging persistence issues
+    print(f"[SESSION DEBUG] Complete current_file in session: {session.get('current_file')}")
+    
+    # Check session implementation type for debugging
+    import flask.sessions
+    session_type = type(session)
+    session_impl = getattr(session, 'session_interface', None)
+    print(f"[SESSION DEBUG] Session type: {session_type}, Implementation: {session_impl}")
+
+    # Initialize Firestore client
+    from firebase_admin import firestore
+    db = firestore.client()
+    
+    data = request.json
+    user_message = data.get('message', '')
+    system_prompt = data.get('system_prompt', None)
+    user_id = session.get('user_id')
+
+    # Check if user has exceeded their token limit
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if (not can_use):
+
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if (plan == 'free'):
+            upgrade_message = {
+                'en': "You've reached your daily free token limit. Please upgrade to our Premium plan for higher limits.",
+                'pl': "Osiągnąłeś dzienny limit darmowych tokenów. Przejdź na plan Premium, aby uzyskać wyższe limity.",
+                'az': "Gündəlik pulsuz token limitinə çatmısınız. Daha yüksək limitlər üçün Premium planımıza yüksəldin."
+            }
+            return jsonify({
+                'response': upgrade_message.get(g.current_language, upgrade_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            })
+        else:
+            limit_message = {
+                'en': "You've reached your daily token limit. Your limit will reset at midnight UTC.",
+                'pl': "Osiągnąłeś dzienny limit tokenów. Twój limit zostanie zresetowany o północy UTC.",
+                'az': "Gündəlik token limitinizə çatmısınız. Limitiniz UTC ilə gecə yarısı sıfırlanacaq."
+            }
+            return jsonify({
+                'response': limit_message.get(g.current_language, limit_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            })
+
+    # Check if total monthly budget has been exceeded
+    current_month = datetime.now().strftime('%Y-%m')
+    monthly_usage_doc = db.collection('token_usage_monthly').document(current_month).get()
+    total_monthly_usage = 0
+    if (monthly_usage_doc.exists):
+        total_monthly_usage = monthly_usage_doc.to_dict().get('tokens_used', 0)
+    
+    budget_limit_exceeded = (total_monthly_usage >= TOTAL_MONTHLY_BUDGET_TOKENS)
+
+    # Check if user is admin before applying the budget limit
+    is_admin = False
+    user_doc = db.collection('users').document(user_id).get()
+    if (user_doc.exists):
+        is_admin = user_doc.to_dict().get('is_admin', False)
+    
+    if (budget_limit_exceeded and not is_admin):
+        budget_message = {
+            'en': "Our monthly API budget has been reached. Service will resume at the start of the next billing cycle. We apologize for the inconvenience.",
+            'pl': "Nasz miesięczny budżet API został wyczerpany. Usługa zostanie wznowiona na początku następnego cyklu rozliczeniowego. Przepraszamy za niedogodności.",
+            'az': "Aylıq API büdcəmizə çatılıb. Xidmət növbəti faktura dövrünün əvvəlində bərpa olunacaq. Narahatlıq üçün üzr istəyirik."
+        }
+        return jsonify({
+            'response': budget_message.get(g.current_language, budget_message['en']),
+            'limit_reached': True,
+            'budget_exceeded': True
+        })    # If we get here, the user can proceed with their request
+    try:
+        # Check for uploaded file content in session
+        pdf_content = None
+        file_id = None
+        filename = None
+        has_file = False
+
+        # Check if there's file content in the session
+        if 'current_file' in session and session['current_file'].get('content'):
+            pdf_content = session['current_file'].get('content')
+            file_id = session['current_file'].get('file_id')
+            filename = session['current_file'].get('filename')
+            has_file = True
+            print(f"Found file in session: {filename}, content length: {len(pdf_content)} chars")
+            
+            # Check if user message references or asks about the file
+            file_reference_terms = [
+                # Direct file references
+                "file", "document", "pdf", "uploaded", "attachment", "content",
+                "the document", "this document", "that file", "the file", "the pdf", "this pdf",
+                # Contextual references
+                "on this", "in this", "about this", "from this", "through this", "of this",
+                "what is this", "what's this", "what does this", "what's in this", "what is in", "what does it say",
+                # Actions on documents
+                "analyze", "summarize", "explain", "extract", "read", "understand"
+            ]
+            
+            # Check if any file extension is mentioned
+            file_extensions = ["pdf", "docx", "doc", "txt", "ppt", "pptx", "xlsx", "xls"]
+            for ext in file_extensions:
+                if ext in user_message.lower() or f".{ext}" in user_message.lower():
+                    file_reference_terms.append(ext)
+            
+            # Check if filename is mentioned
+            if filename:
+                clean_filename = os.path.splitext(filename)[0].lower().replace('_', ' ').replace('-', ' ')
+                filename_parts = clean_filename.split()
+                for part in filename_parts:
+                    if len(part) > 3 and part.lower() in user_message.lower():
+                        file_reference_terms.append(part)
+            
+            # Check if message contains any file reference terms
+            has_file_reference = any(term.lower() in user_message.lower() for term in file_reference_terms)
+            
+            # Use MCP for processing file content if user is referring to it
+            if has_file_reference:
+                from mcp.model_adapter import MCPModelFactory
+                from agents.utils import create_mcp_context_from_inputs, extract_metrics_from_mcp_response
+                  # Create context with document content
+                enhanced_user_message = user_message
+                if filename:
+                    file_context = f"I'm asking about the document I uploaded titled: '{filename}'. Please answer using the content of this document."
+                    enhanced_user_message = f"{file_context}\n\n{user_message}"
+                
+                # Check if PDF content is valid
+                safe_pdf_content = pdf_content
+                if safe_pdf_content and len(safe_pdf_content) > 100000:
+                    # If content is too large, truncate it
+                    print(f"Warning: Truncating large document from {len(safe_pdf_content)} to 100000 chars")
+                    safe_pdf_content = safe_pdf_content[:100000] + "\n[Content truncated due to size limits]"
+                
+                try:
+                    mcp_context = create_mcp_context_from_inputs(
+                        user_input=enhanced_user_message,
+                        user_id=user_id,
+                        session_id=data.get('session_id', str(int(time.time() * 1000))),
+                        document_text=safe_pdf_content,
+                        context_type="general_chat"
+                    )
+                except Exception as context_error:
+                    print(f"Error creating MCP context: {context_error}")
+                    # Create simpler context without document text
+                    mcp_context = create_mcp_context_from_inputs(
+                        user_input=enhanced_user_message,
+                        user_id=user_id,
+                        session_id=data.get('session_id', str(int(time.time() * 1000))),
+                        document_text=None,
+                        context_type="general_chat"
+                    )
+                
+                # Add instructions to use document content
+                mcp_context.add_system_instruction(
+                    "This conversation includes an uploaded document. When the user asks about the document or its contents, " +
+                    "you MUST reference and use information from the document in your response. " +
+                    "The document text has been provided in the context."
+                )
+                
+                # Add file metadata
+                from mcp.context import ContextType, ContextMetadata
+                file_metadata = {
+                    "filename": filename,
+                    "file_id": file_id,
+                    "file_type": os.path.splitext(filename)[1][1:].lower() if filename else 'pdf',
+                    "has_content": bool(pdf_content),
+                    "content_length": len(pdf_content) if pdf_content else 0
+                }
+                
+                file_context_message = {
+                    "file_context": f"The user has uploaded a document named '{filename}'. " +
+                                   f"The content of this document has been included in the conversation context. " +
+                                   f"When the user asks about 'the file' or 'the document', they are referring to this document. " +
+                                   f"IMPORTANT: You must reference the document content when responding to questions about it.",
+                    "response_requirements": "When the user asks about the document, make sure to extract and use relevant information from the document in your response.",
+                    "file_metadata": file_metadata                        
+                }
+                
+                # Add file context with high importance
+                mcp_context.add_element(
+                    content=file_context_message,
+                    type_=ContextType.USER_MEMORY,
+                    metadata=ContextMetadata(source="file_upload", importance=10)
+                )                # Generate response with MCP
+                try:
+                    model_adapter = MCPModelFactory.create(model_name="gemini")
+                    
+                    # Run the async function safely
+                    response_obj = run_async(model_adapter.generate_with_context(enhanced_user_message, mcp_context))
+                    response_text = response_obj.text
+                    
+                    # Extract usage metrics
+                    metrics = extract_metrics_from_mcp_response(response_obj)
+                    tokens_used = metrics.get('total_tokens', 0)
+                except Exception as mcp_error:
+                    print(f"Error during MCP generation: {mcp_error}")
+                    # Fallback to regular AI response
+                    response_text = get_ai_response(
+                        f"I'm analyzing a document titled '{filename}'. {user_message}",
+                        system_prompt=system_prompt, 
+                        language=g.current_language
+                    )
+                    tokens_used = len(user_message) // 4 + len(response_text) // 4
+            else:
+                # Regular chat without file context
+                response_text = get_ai_response(user_message, system_prompt=system_prompt, language=g.current_language)
+                # Estimate tokens used
+                tokens_used = len(user_message) // 4 + len(response_text) // 4
+        else:            # No file context, use regular chat
+            response_text = get_ai_response(user_message, system_prompt=system_prompt, language=g.current_language)
+            # Estimate tokens used
+            tokens_used = len(user_message) // 4 + len(response_text) // 4
+            
+        # Track token usage for this API call
+        track_token_usage_for_api_call(user_id, user_message, response_text, tokens_used)
+        
+        # Save to chat history - we'll save to the general chat type
+        try:
+            from firebase_utils import save_chat_message
+            # Save user message and assistant response to Firestore
+            save_chat_message(user_id, 'general', user_message, 'user')
+            save_chat_message(user_id, 'general', response_text, 'assistant')
+        except Exception as history_err:
+            print(f"Error saving to chat history: {history_err}")
+            # Get updated remaining tokens
+        current_usage = get_user_daily_token_usage(user_id)
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        daily_limit = (FREE_PLAN_DAILY_LIMIT if (plan == 'free') else PAID_PLAN_DAILY_LIMIT)
+        
+        # Handle case where current_usage might be a dictionary
+        if isinstance(current_usage, dict):
+            tokens_used = current_usage.get('tokens_used', 0)
+        else:
+            tokens_used = current_usage
+            
+        updated_remaining = (daily_limit - tokens_used)
+          # Format the response
+        formatted_response = response_text.replace("\n", "<br>")
+        
+        # Ensure all values are JSON serializable
+        try:
+            # Create response object with proper spacing
+            response_object = {
+                'response': formatted_response,
+                'tokens_used': int(tokens_used),
+                'tokens_remaining': max(0, int(updated_remaining)),
+                'plan': plan,
+                'hasFile': bool(has_file),
+                'fileName': filename if has_file else None,
+                'fileId': file_id if has_file else None
+            }
+            return jsonify(response_object)
+        except (TypeError, ValueError) as json_err:
+            print(f"JSON serialization error: {json_err}")
+            # Fallback response with minimal data
+            return jsonify({
+                'response': formatted_response,
+                'error': "Some response data could not be serialized"
+            })
+        
+    except Exception as e:
+        import traceback
+        error_trace = traceback.format_exc()
+        print(f"Error in chat API: {e}")
+        print(f"Error traceback: {error_trace}")
+        
+        # Log additional context for debugging
+        if 'current_usage' in locals():
+            print(f"DEBUG - current_usage type: {type(current_usage)}, value: {current_usage}")
+        if 'tokens_used' in locals():
+            print(f"DEBUG - tokens_used: {tokens_used}")
+        if 'daily_limit' in locals():
+            print(f"DEBUG - daily_limit: {daily_limit}")
+        
+        error_message = {
+            'en': f"Sorry, I encountered an error: {str(e)}",
+            'pl': f"Przepraszam, napotkałem błąd: {str(e)}",
+            'az': f"Üzr istəyirəm, bir xəta baş verdi: {str(e)}"
+        }
+        return jsonify({
+            'response': error_message.get(g.current_language, error_message['en']),
+            'error': str(e)
+        })
+
+# ==== SUBSCRIPTION MANAGEMENT ROUTES ====
+
+@app.route('/account', methods=['GET'])
+@login_required
+def account():
+    """User account page showing subscription status and token usage"""
+    # Log that we're rendering the account page for debugging
+    print("Rendering account page with layout.html template")
+    user_id = session.get('user_id')
+
+    # Get user's subscription status
+    subscription = get_user_subscription(user_id)
+    plan = subscription.get('plan', 'free')    # Get user's token usage for today
+    current_usage = get_user_daily_token_usage(user_id)
+
+    # Handle case where current_usage might be a dictionary or integer
+    if isinstance(current_usage, dict):
+        tokens_used = current_usage.get('tokens_used', 0)
+    else:
+        tokens_used = current_usage
+
+    # Get plan limits
+    daily_limit = (FREE_PLAN_DAILY_LIMIT if (plan == 'free') else PAID_PLAN_DAILY_LIMIT)
+
+    # Calculate percentage used
+    usage_percentage = (min(round(((tokens_used / daily_limit) * 100)), 100) if (daily_limit > 0) else 0)
+
+    # Get subscription details
+    subscription_status = subscription.get('subscription_status', None)
+    subscription_end_date = subscription.get('subscription_end_date', None)
+
+    # Format end date if available
+    formatted_end_date = None
+    if (subscription_end_date):
+        formatted_end_date = datetime.fromtimestamp(subscription_end_date).strftime('%Y-%m-%d')    # Get Stripe publishable key from environment variable
+    stripe_publishable_key = os.getenv("STRIPE_PUBLISHABLE_KEY", "")
+    
+    return render_template(
+        'account.html',
+        active_page='account',
+        plan=plan,
+        current_usage=tokens_used,  # Use tokens_used instead of current_usage
+        daily_limit=daily_limit,
+        usage_percentage=usage_percentage,
+        subscription_status=subscription_status,
+        subscription_end_date=formatted_end_date,
+        stripe_publishable_key=stripe_publishable_key
+    )
+
+@app.route('/create-checkout-session', methods=['POST'])
+@login_required
+def create_checkout():
+    """Create a Stripe checkout session for subscription"""
+    try:
+        user_id = session.get('user_id')
+        user_email = session.get('user_email')
+
+        # Get route URLs from the request JSON
+        success_url = request.json.get('success_url', url_for('payment_success', _external=True))
+        cancel_url = request.json.get('cancel_url', url_for('payment_cancel', _external=True))
+
+        # Log the request info for debugging
+        print(f"Creating checkout session for user_id: {user_id}, email: {user_email}")
+        print(f"Success URL: {success_url}")
+        print(f"Cancel URL: {cancel_url}")
+
+        # Create the checkout session
+        session_id = create_stripe_checkout_session(
+            user_id,
+            user_email,
+            success_url,
+            cancel_url
+        )
+        
+        if (not session_id):
+            print("Failed to create checkout session - no session ID returned")
+            return jsonify({'error': 'Failed to create checkout session - please try again later'}), 500
+        
+        print(f"Successfully created checkout session with ID: {session_id}")
+        return jsonify({'id': session_id})
+    except Exception as e:
+        print(f"Error creating checkout session: {str(e)}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/payment/success')
+@login_required
+def payment_success():
+    """Handle successful payment"""
+    flash('Your subscription has been activated successfully! You now have access to premium features.', 'success')
+    return redirect(url_for('account'))
+
+@app.route('/payment/cancel')
+@login_required
+def payment_cancel():
+    """Handle cancelled payment"""
+    flash('Your payment was cancelled. You can try again whenever you\'re ready.', 'info')
+    return redirect(url_for('account'))
+
+@app.route('/webhook/stripe', methods=['POST'])
+def stripe_webhook():
+    """Handle Stripe webhook events"""
+    payload = request.data
+    signature = request.headers.get('Stripe-Signature')
+    
+    result = handle_stripe_webhook(payload, signature)
+    
+    if (result.get('success', False)):
+        return jsonify({'status': 'success'}), 200
+    else:
+        return jsonify({'status': 'error', 'message': result.get('error', 'Unknown error')}), 400
+
+# ==== ADMIN PANEL ROUTES ====
+
+@app.route('/admin')
+@admin_required
+def admin_dashboard():
+    """Admin dashboard for monitoring usage and managing users"""
+    dashboard_data = get_admin_dashboard_data()
+    
+    return render_template(
+        'admin_dashboard.html',
+        active_page='admin',
+        dashboard_data=dashboard_data
+    )
+
+@app.route('/admin/reset-daily-usage', methods=['POST'])
+@admin_required
+def admin_reset_daily_usage():
+    """Reset all users' daily token usage (admin only)"""
+    success = reset_all_daily_token_usage()
+    
+    if (success):
+        flash('Daily usage counters have been reset for all users.', 'success')
+    else:
+        flash('Failed to reset daily usage counters.', 'danger')
+    
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/admin/update-user-limit', methods=['POST'])
+@admin_required
+def admin_update_user_limit():
+    """Update a user's custom token limit (admin only)"""
+    user_id = request.form.get('user_id')
+    new_limit = int(request.form.get('new_limit', 0))
+    
+    if (not user_id or (new_limit <= 0)):
+        flash('Invalid user ID or limit value.', 'danger')
+        return redirect(url_for('admin_dashboard'))
+    
+    success = update_user_limit(user_id, new_limit)
+    
+    if (success):
+        flash(f'Token limit for user {user_id} has been updated to {new_limit}.', 'success')
+    else:
+        flash('Failed to update user token limit.', 'danger')
+    
+    return redirect(url_for('admin_dashboard'))
+
+@app.route('/api/usage/check', methods=['GET'])
+@login_required
+def check_usage():
+    """API endpoint to check user's token usage and limits"""
+    try:
+        # Import firebase_admin and firestore at the function level for local scope
+        import firebase_admin
+        from firebase_admin import firestore
+        
+        user_id = session.get('user_id')
+        if not user_id:
+            return jsonify({
+                'error': 'User not authenticated',
+                'plan': 'free',
+                'current_usage': 0,
+                'daily_limit': FREE_PLAN_DAILY_LIMIT,
+                'usage_percentage': 0,
+                'remaining': FREE_PLAN_DAILY_LIMIT,
+                'limit_reached': False,
+                'budget_exceeded': False
+            }), 401
+
+        # Get the db instance
+        db = firestore.client()
+
+        # Get user's subscription status
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        # Get user's token usage for today
+        current_usage = get_user_daily_token_usage(user_id)
+
+        # Handle case where current_usage might be a dictionary or integer
+        if isinstance(current_usage, dict):
+            tokens_used = current_usage.get('tokens_used', 0)
+        else:
+            tokens_used = current_usage
+
+        # Get daily limit based on plan
+        daily_limit = (FREE_PLAN_DAILY_LIMIT if (plan == 'free') else PAID_PLAN_DAILY_LIMIT)
+
+        # Calculate percentage used
+        usage_percentage = (min(round(((tokens_used / daily_limit) * 100)), 100) if (daily_limit > 0) else 0)
+        
+        # Check if total monthly budget has been exceeded
+        current_month = datetime.now().strftime('%Y-%m')
+        monthly_usage_doc = db.collection('token_usage_monthly').document(current_month).get()
+        total_monthly_usage = 0
+        if (monthly_usage_doc.exists):
+            total_monthly_usage = monthly_usage_doc.to_dict().get('tokens_used', 0)
+        
+        budget_limit_exceeded = (total_monthly_usage >= TOTAL_MONTHLY_BUDGET_TOKENS)
+        
+        return jsonify({
+            'plan': plan,
+            'current_usage': tokens_used,  # Return tokens_used instead of the raw current_usage
+            'daily_limit': daily_limit,
+            'usage_percentage': usage_percentage,
+            'remaining': (daily_limit - tokens_used),
+            'limit_reached': (tokens_used >= daily_limit),
+            'budget_exceeded': budget_limit_exceeded
+        })
+    except Exception as e:
+        print(f"[API ERROR] Error checking usage: {e}")
+        # Return default values in case of error
+        return jsonify({
+            'plan': 'free',
+            'current_usage': 0,
+            'daily_limit': FREE_PLAN_DAILY_LIMIT,
+            'usage_percentage': 0,
+            'remaining': FREE_PLAN_DAILY_LIMIT,
+            'limit_reached': False,
+            'budget_exceeded': False,
+            'error': 'Error retrieving usage data'
+        }), 500
+
+
+
+@app.route('/create-customer-portal-session', methods=['POST'])
+@login_required
+def create_customer_portal_session():
+    """Create a Stripe customer portal session for managing subscriptions"""
+    try:
+        user_id = session.get('user_id')
+
+        # Get user's Stripe customer ID
+        user_doc = db.collection('users').document(user_id).get()
+        if (not user_doc.exists):
+            return jsonify({'error': 'User not found'}), 404
+            
+        user_data = user_doc.to_dict()
+        customer_id = user_data.get('stripe_customer_id')
+        
+        if (not customer_id):
+            return jsonify({'error': 'No subscription found'}), 400
+
+        # Create a portal session
+        portal_session = stripe.billing_portal.Session.create(
+            customer=customer_id,
+            return_url=url_for('account', _external=True),
+        )
+        
+        return jsonify({'url': portal_session.url})
+    except Exception as e:
+        print(f"Error creating portal session: {e}")
+        return jsonify({'error': str(e)}), 500
+
+@app.route('/agent/<plan_name>', methods=['POST'])
+@login_required
+def execute_agent_plan(plan_name):
+    """
+    Execute an agent plan with the given inputs.
+    
+    This endpoint handles requests to the Liya agent using ADK plans.
+    It supports:
+    - proofread_and_summarize: For proofreading and summarizing documents
+    - study_assistant: For answering study-related questions with memory
+    """
+
+    # Get user ID for personalization
+    user_id = session.get('user_id')
+
+    # Check if user has exceeded their token limit
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if (not can_use):
+
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if (plan == 'free'):
+            upgrade_message = {
+                'en': "You've reached your daily free token limit. Please upgrade to our Premium plan for higher limits.",
+                'pl': "Osiągnąłeś dzienny limit darmowych tokenów. Przejdź na plan Premium, aby uzyskać wyższe limity.",
+                'az': "Gündəlik pulsuz token limitinə çatmısınız. Daha yüksək limitlər üçün Premium planımıza yüksəldin."
+            }
+            return jsonify({
+                'error': upgrade_message.get(g.current_language, upgrade_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            }), 429
+        else:
+            limit_message = {
+                'en': "You've reached your daily token limit. Your limit will reset at midnight UTC.",
+                'pl': "Osiągnąłeś dzienny limit tokenów. Twój limit zostanie zresetowany o północy UTC.",
+                'az': "Gündəlik token limitinizə çatmısınız. Limitiniz UTC ilə gecə yarısı sıfırlanacaq."
+            }
+            return jsonify({
+                'error': limit_message.get(g.current_language, limit_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            }), 429
+
+    # Get inputs from request
+    data = (request.json or {})
+
+    # Log the request
+    print(f"Agent request for plan: {plan_name}, user: {user_id}")
+
+    # Initialize the agent if not already done
+    initialize_agent()
+
+    # Execute the appropriate plan
+    try:
+        if (plan_name == "proofread_and_summarize"):
+            result = proofread_and_summarize_plan(get_agent(), data)
+        elif (plan_name == "study_assistant"):
+
+            # Handle async function with asyncio
+            import asyncio
+            loop = asyncio.new_event_loop()
+            asyncio.set_event_loop(loop)
+            result = loop.run_until_complete(study_assistant_plan(get_agent(), data, user_id))
+            loop.close()
+        else:
+            return jsonify({"error": f"Unknown plan: {plan_name}"}), 400
+
+        # Track token usage (estimate based on input and output length)
+        input_text = (data.get('text', '') or data.get('query', ''))
+        input_length = len(input_text)
+
+        # Rough estimate: 1 token per 4 chars for English
+        estimated_tokens = ((input_length // 4) + 500)  # Base cost + input tokens
+        
+        if ('response' in result):
+            estimated_tokens += (len(result['response']) // 4)  # Output tokens
+        
+        track_agent_usage(user_id, estimated_tokens, plan_name)
+        track_token_usage_for_api_call(user_id, str(data), str(result)[:200], estimated_tokens)
+
+        # Return successful result
+        return jsonify(result)
+    except Exception as e:
+        print(f"Error executing agent plan: {e}")
+        return jsonify({"error": str(e)}), 500
+
+@app.route('/study/use_agent', methods=['POST'])
+@login_required
+def study_use_agent():
+    """Process uploaded content with the ADK agent"""
+    data = (request.json or {})
+    
+    if (not data.get('content')):
+        return
+
+    # Extract content and prepare inputs for agent
+    filename = data.get('filename', 'document.pdf')
+    content = data.get('content', '')
+    query = data.get('query', 'Summarize this document and explain the key concepts')
+    
+    agent_inputs = {
+        "query": query,
+        "document_text": content
+    }
+
+    # Route to the appropriate agent endpoint
+    try:
+        # Initialize the agent if not already done
+        initialize_agent()        # Execute the study assistant plan
+        result = study_assistant_plan(get_agent(), agent_inputs, session.get('user_id'))
+        
+        # Track usage
+        track_agent_usage(session.get('user_id'), "study_assistant", (len(content) // 4) + (len(query) // 4))
+        
+        return jsonify({
+            'success': True,
+            'response': result.get('response', 'No response generated'),
+            'task_type': result.get('task_type')
+        })
+    except Exception as e:
+        print(f"Error using agent with document: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/proofread/use_agent', methods=['POST'])
+@login_required
+def proofread_use_agent():
+    """Process text with the ADK agent for proofreading and summarizing"""
+    data = (request.json or {})
+    
+    if (not data.get('text') and not data.get('pdf_content')):
+        return jsonify({'error': 'No content provided'}), 400
+
+    # Prepare inputs for agent
+    agent_inputs = {}
+    
+    if (data.get('text')):
+        agent_inputs["text"] = data.get('text')
+    elif (data.get('pdf_content')):
+        agent_inputs["pdf_content"] = data.get('pdf_content')
+
+    # Initialize the agent if not already done
+    initialize_agent()
+    
+    try:
+
+        # Execute the proofread and summarize plan
+        result = proofread_and_summarize_plan(get_agent(), agent_inputs)
+        
+        if (not result.get('success', False)):
+            return jsonify({'error': result.get('error', 'Unknown error')}), 500        # Track usage (estimate based on input length)
+        input_length = len(agent_inputs.get('text', '')) or len(agent_inputs.get('pdf_content', {}).get('content', ''))
+        track_agent_usage(session.get('user_id'), "proofread_and_summarize", (input_length // 4))
+
+        # Prepare the PDF for download
+        pdf_filename = result.get('pdf_filename')
+        pdf_path = result.get('pdf_path')
+        
+        if (pdf_path and os.path.exists(pdf_path)):
+
+            # Copy the PDF to the uploads directory for download
+            final_pdf_path = os.path.join(app.config['UPLOAD_FOLDER'], pdf_filename)
+            import shutil
+            shutil.copy2(pdf_path, final_pdf_path)
+
+            # Create a URL for the PDF
+            pdf_url = url_for('download_file', filename=pdf_filename, _external=True)
+
+            # Also copy the summary file
+            summary_filename = result.get('summary_filename')
+            summary_path = result.get('summary_path')
+            
+            if (summary_path and os.path.exists(summary_path)):
+                final_summary_path = os.path.join(app.config['UPLOAD_FOLDER'], summary_filename)
+                shutil.copy2(summary_path, final_summary_path)
+                summary_url = url_for('download_file', filename=summary_filename, _external=True)
+            else:
+                summary_url = None
+            
+            return jsonify({
+                'success': True,
+                'pdf_url': pdf_url,
+                'summary_url': summary_url,
+                'summary': result.get('summary', ''),
+                'key_points': result.get('key_points', []),
+                'corrections': result.get('corrections', [])
+            })
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'Failed to generate PDF'
+            }), 500
+    except Exception as e:
+        print(f"Error using agent for proofreading: {e}")
+        return jsonify({'error': str(e)}), 500
+
+# Excel Generator Route
+@app.route('/generate_excel', methods=['POST'])
+@login_required
+def generate_excel():
+    """
+    Generate an Excel file from a natural language prompt using Gemini
+    
+    POST Parameters:
+        prompt (str): Natural language description of the Excel file to generate
+        
+    Returns:
+        JSON with download link or error message
+    """
+    data = request.json
+    prompt = data.get('prompt', '')
+    
+    if (not prompt):
+        return jsonify({'error': 'No prompt provided'}), 400
+
+    # Check if user has exceeded their token limit
+    user_id = session.get('user_id')
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if (not can_use):
+
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if (plan == 'free'):
+            upgrade_message = {
+                'en': "You've reached your daily free token limit. Please upgrade to our Premium plan for higher limits.",
+                'pl': "Osiągnąłeś dzienny limit darmowych tokenów. Przejdź na plan Premium, aby uzyskać wyższe limity.",
+                'az': "Gündəlik pulsuz token limitinə çatmısınız. Daha yüksək limitlər üçün Premium planımıza yüksəldin."
+            }
+            return jsonify({
+                'error': upgrade_message.get(g.current_language, upgrade_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            }), 429
+        else:
+            limit_message = {
+                'en': "You've reached your daily token limit. Your limit will reset at midnight UTC.",
+                'pl': "Osiągnąłeś dzienny limit tokenów. Twój limit zostanie zresetowany o północy UTC.",
+                'az': "Gündəlik token limitinizə çatmısınız. Limitiniz UTC ilə gecə yarısı sıfırlanacaq."
+            }
+            return jsonify({
+                'error': limit_message.get(g.current_language, limit_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            }), 429
+    
+    try:
+
+        # Generate the Excel file
+        file_path, filename = generate_excel_from_prompt(prompt, model)
+
+        # Copy the file to the uploads directory for serving
+        final_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        shutil.copy2(file_path, final_path)
+
+        # Create a URL for the Excel file
+        excel_url = url_for('download_file', filename=filename, _external=True)
+
+        # Track token usage for this API call
+
+        # Note: We're using filename as the response text since we don't have actual text content
+        track_token_usage_for_api_call(user_id, prompt, filename)
+        
+        return jsonify({
+            'success': True,
+            'excel_url': excel_url,
+            'filename': filename
+        })
+        
+    except Exception as e:
+        print(f"Error generating Excel: {e}")
+        return jsonify({'error': f'Error generating Excel file: {str(e)}'}), 500
+
+@app.route('/excel')
+@login_required
+def excel_generator():
+    """Excel generator page"""
+    return render_template('excel.html', active_page='excel')
+
+@app.route('/generate_excel_crew', methods=['POST'])
+@login_required
+def generate_excel_crew():
+    """
+    Generate an Excel file from a natural language prompt using CrewAI multi-agent system
+    
+    POST Parameters:
+        prompt (str): Natural language description of the Excel file to generate
+        use_crew (bool): Whether to use CrewAI system (default True)
+        
+    Returns:
+        JSON with download link or error message
+    """
+    data = request.json
+    prompt = data.get('prompt', '')
+    use_crew = data.get('use_crew', True)
+    
+    if not prompt:
+        return jsonify({'error': 'No prompt provided'}), 400
+
+    # Check if user has exceeded their token limit
+    user_id = session.get('user_id')
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if not can_use:
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if plan == 'free':
+            upgrade_message = {
+                'en': "You've reached your daily free token limit. Please upgrade to our Premium plan for higher limits.",
+                'pl': "Osiągnąłeś dzienny limit darmowych tokenów. Przejdź na plan Premium, aby uzyskać wyższe limity.",
+                'az': "Gündəlik pulsuz token limitinə çatmısınız. Daha yüksək limitlər üçün Premium planımıza yüksəldin."
+            }
+            return jsonify({
+                'error': upgrade_message.get(g.current_language, upgrade_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            }), 429
+        else:
+            limit_message = {
+                'en': "You've reached your daily token limit. Your limit will reset at midnight UTC.",
+                'pl': "Osiągnąłeś dzienny limit tokenów. Twój limit zostanie zresetowany o północy UTC.",
+                'az': "Gündəlik token limitinizə çatmısınız. Limitiniz UTC ilə gecə yarısı sıfırlanacaq."
+            }
+            return jsonify({                'error': limit_message.get(g.current_language, limit_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            }), 429
+    
+    try:
+        # Use simplified CrewAI multi-agent system for enhanced Excel generation
+        if use_crew:
+            from agents.simple_excel_crew import generate_excel_with_simple_crew
+            result = generate_excel_with_simple_crew(prompt)
+            
+            if result.get('success') and result.get('excel_content'):
+                # Save the Excel content to a file
+                import base64
+                import uuid
+                
+                # Generate unique filename
+                filename = f"excel_{uuid.uuid4().hex[:8]}_{datetime.now().strftime('%Y%m%d_%H%M%S')}.xlsx"
+                file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+                
+                # Decode and save the Excel file
+                excel_data = base64.b64decode(result['excel_content'])
+                with open(file_path, 'wb') as f:
+                    f.write(excel_data)
+                
+                # Create a URL for the Excel file
+                excel_url = url_for('download_file', filename=filename, _external=True)
+                
+                # Track token usage for this API call
+                estimated_tokens = result.get('token_usage', 500)  # Default estimate
+                track_token_usage_for_api_call(user_id, prompt, f"SimpleCrew Excel generation: {filename}", estimated_tokens=estimated_tokens)
+                
+                return jsonify({
+                    'success': True,
+                    'excel_url': excel_url,
+                    'filename': filename,
+                    'method': 'simple_crewai',
+                    'agent_details': {
+                        'agents_used': ['Excel Generator Agent'],
+                        'processing_type': 'Simplified Multi-Agent',
+                        'workflow': 'Single agent with tool assistance'
+                    }
+                })
+            else:
+                # SimpleCrew failed, fall back to original method
+                print(f"SimpleCrew generation failed: {result.get('error', 'Unknown error')}")
+                file_path, filename = generate_excel_from_prompt(prompt)
+        else:
+            # Use original method directly
+            file_path, filename = generate_excel_from_prompt(prompt)
+        
+        # Copy the file to the uploads directory for serving
+        final_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        shutil.copy2(file_path, final_path)
+
+        # Create a URL for the Excel file
+        excel_url = url_for('download_file', filename=filename, _external=True)
+
+        # Track token usage for this API call
+        track_token_usage_for_api_call(user_id, prompt, filename)
+        
+        return jsonify({
+            'success': True,
+            'excel_url': excel_url,
+            'filename': filename,
+            'method': 'fallback'
+        })
+        
+    except Exception as e:
+        print(f"Error generating Excel with CrewAI: {e}")
+        # Try fallback to original method
+        try:
+            file_path, filename = generate_excel_from_prompt(prompt)
+            
+            # Copy the file to the uploads directory for serving
+            final_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            shutil.copy2(file_path, final_path)
+
+            # Create a URL for the Excel file
+            excel_url = url_for('download_file', filename=filename, _external=True)
+
+            # Track token usage for this API call
+            track_token_usage_for_api_call(user_id, prompt, filename)
+            
+            return jsonify({
+                'success': True,
+                'excel_url': excel_url,
+                'filename': filename,
+                'method': 'fallback',
+                'warning': f'CrewAI failed, used fallback method: {str(e)}'
+            })
+        except Exception as fallback_error:
+            return jsonify({'error': f'Error generating Excel file: {str(fallback_error)}'}), 500
+
+# Chat History API Endpoints
+@app.route('/api/chat_history/<chat_type>', methods=['GET'])
+@login_required
+def get_user_chat_history(chat_type):
+    """API endpoint to get chat history for a specific user and chat type"""
+    if (chat_type not in ['study', 'entertainment']):
+        return jsonify({'error': 'Invalid chat type'}), 400
+    
+    user_id = session.get('user_id')
+
+    # Import and use the Firestore history functions
+    from firebase_utils import get_chat_history, format_chat_history_for_api
+
+    # Fetch chat history
+    messages = get_chat_history(user_id, chat_type)
+
+    # Format the messages for the client
+    formatted_messages = []
+    for msg in messages:
+        formatted_messages.append({
+            'role': msg.get('role', 'user'),
+            'content': msg.get('content', ''),
+            'timestamp': msg.get('timestamp', '')  # This will be a Firestore timestamp
+        })
+    
+    return jsonify({
+        'success': True,
+        'messages': formatted_messages,
+        'history': format_chat_history_for_api(messages)
+    })
+
+@app.route('/api/chat_history/<chat_type>/clear', methods=['POST'])
+@login_required
+def clear_chat_history(chat_type):
+    """API endpoint to clear chat history for a specific user and chat type"""
+    if (chat_type not in ['study', 'entertainment']):
+        return jsonify({'error': 'Invalid chat type'}), 400
+    
+    user_id = session.get('user_id')
+
+    # Import and use the Firestore history function
+    from firebase_utils import delete_chat_history
+
+    # Clear chat history
+    success = delete_chat_history(user_id, chat_type)
+    
+    return jsonify({
+        'success': success,
+        'message': 'Chat history cleared successfully' if success else 'Failed to clear chat history'
+    })
+
+# Presentation Builder Routes
+@app.route('/generate_presentation', methods=['POST'])
+@login_required
+def generate_presentation():
+    """
+    Generate a presentation from a natural language prompt or uploaded file using Gemini
+    
+    POST Parameters:
+        prompt (str): Natural language description of the presentation to generate
+        file (file): Optional file to generate presentation from
+        
+    Returns:
+        JSON with download link or error message
+    """
+    data = request.form
+    prompt = data.get('prompt', '')
+    file = request.files.get('file', None)
+    
+    if (not prompt and not file):
+        return jsonify({'error': 'No prompt or file provided'}), 400
+
+    # Check if user has exceeded their token limit
+    user_id = session.get('user_id')
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if (not can_use):
+
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if (plan == 'free'):
+            upgrade_message = {
+                'en': "You've reached your daily free token limit. Please upgrade to our Premium plan for higher limits.",
+                'pl': "Osiągnąłeś dzienny limit darmowych tokenów. Przejdź na plan Premium, aby uzyskać wyższe limity.",
+                'az': "Gündəlik pulsuz token limitinə çatmısınız. Daha yüksək limitlər üçün Premium planımıza yüksəldin."
+            }
+            return jsonify({
+                'error': upgrade_message.get(g.current_language, upgrade_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            }), 429
+        else:
+            limit_message = {
+                'en': "You've reached your daily token limit. Your limit will reset at midnight UTC.",
+                'pl': "Osiągnąłeś dzienny limit tokenów. Twój limit zostanie zresetowany o północy UTC.",
+                'az': "Gündəlik token limitinizə çatmısınız. Limitiniz UTC ilə gecə yarısı sıfırlanacaq."
+            }
+            return jsonify({
+                'error': limit_message.get(g.current_language, limit_message['en']),
+                'limit_reached': True,
+                'plan': plan            }), 429
+    try:
+        if (file):
+            # Save the uploaded file
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+
+            # Generate the presentation from the file
+            presentation_path, presentation_filename = generate_presentation_from_file(file_path, model)
+        else:            # Generate the presentation from the topic using the topic-specific generator
+            # This ensures presentations are created based on the topic provided by the user (e.g., Formula 1)
+            # rather than treating the topic as content to be restructured
+            presentation_path, presentation_filename = generate_presentation_from_topic(prompt, model)
+            
+        # Copy the file to the uploads directory for serving
+        final_path = os.path.join(app.config['UPLOAD_FOLDER'], presentation_filename)
+        shutil.copy2(presentation_path, final_path)
+        
+        # Create a URL for the presentation file
+        download_url = url_for('download_file', filename=presentation_filename, _external=True)
+        
+        # Track token usage for this API call
+        # Note: We're using filename as the response text since we don't have actual text content
+        track_token_usage_for_api_call(user_id, prompt, presentation_filename)
+          
+        # Create the URLs
+        download_url = url_for('download_file', filename=presentation_filename, _external=True)
+        view_url = url_for('view_presentation', filename=presentation_filename, _external=True)
+            
+        # Log the URLs being returned
+        print(f"Sending presentation response with URLs: download={download_url}, view={view_url}")
+        print(f"Presentation file exists: {os.path.exists(final_path)}, Size: {os.path.getsize(final_path) if os.path.exists(final_path) else 'N/A'} bytes")
+        
+        response_data = {
+            'success': True,
+            'download_url': download_url,  # Using download_url to match with client expectations
+            'view_url': view_url,          # Adding view_url for preview functionality
+            'filename': presentation_filename
+        }
+        
+        print(f"Returning response: {response_data}")
+        return jsonify(response_data)
+        
+    except Exception as e:
+        print(f"Error generating presentation: {e}")
+        return jsonify({'error': f'Error generating presentation: {str(e)}'}), 500
+
+@app.route('/presentation')
+@login_required
+def presentation_builder():
+    """Presentation builder page"""
+    return render_template('presentation_builder.html', active_page='presentation')
+
+@app.route('/api/create-presentation', methods=['POST'])
+@login_required
+def create_presentation():
+    """
+    Create a PowerPoint presentation from uploaded file or text input
+    
+    POST Parameters:
+        file (file, optional): Uploaded document (PDF, DOCX, TXT)
+        text (str, optional): Text content if no file is uploaded
+        title (str, optional): Presentation title
+        tone (str, optional): Presentation tone/style (professional, academic, casual)
+        
+    Returns:
+        JSON with download link to the generated presentation and view link for browser viewing
+    """
+
+    # Check if user has exceeded their token limit
+    user_id = session.get('user_id')
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if (not can_use):
+
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if (plan == 'free'):
+            return jsonify({
+                'success': False,
+                'error': 'You have reached your daily token limit. Please upgrade to premium for a higher limit.'
+            }), 403
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'You have reached your daily token limit. Please try again tomorrow.'
+            }), 403
+
+    # Get title and tone from the form data
+    title = request.form.get('title', '')
+    tone = request.form.get('tone', 'professional')
+
+    # Ensure tone is valid
+    if (tone not in ['professional', 'academic', 'casual']):
+        tone = 'professional'
+    
+    try:
+        prompt_text = None
+        presentation_path = None
+        presentation_filename = None
+
+        # Check if we have a file upload
+        if (('file' in request.files) and request.files['file'].filename):
+            file = request.files['file']
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)            # Generate presentation from file
+            presentation_path, presentation_filename = generate_presentation_from_file(file_path, title, tone)
+            
+            print(f"Generated presentation from file: path={presentation_path}, filename={presentation_filename}")
+                
+            prompt_text = f"File: {filename}"
+                
+        elif (('text' in request.form) and request.form['text'].strip()):
+            text = request.form['text'].strip()
+
+            # Generate presentation from text
+            try:
+
+                # Use our model, but with robust error handling
+                ai_response = None
+                response_text = None                # Prepare the prompt for the AI to generate a well-structured presentation
+                prompt = f"""
+                Create a comprehensive presentation about: "{text}"
+                
+                Structure your response in the following Markdown format to ensure it can be correctly parsed:
+                
+                # [PRESENTATION TITLE]
+                
+                ## [SLIDE 1 TITLE]
+                - Specific bullet point with factual information or key insight
+                - Another specific bullet point with data or important detail
+                - Additional bullet point with concrete information
+                - Another relevant point with specific information
+                - Final bullet point for this slide
+                
+                ## [SLIDE 2 TITLE]
+                - Bullet point with specific information
+                - Another specific bullet point
+                - etc...
+                
+                Continue with 5-7 slides total, each with 3-5 specific bullet points. Follow these requirements:
+                
+                1. Create an engaging title for the presentation
+                2. Each slide should have a clear, concise title (max 7-8 words)
+                3. Bullet points must contain SPECIFIC information, facts, statistics, or insights - no placeholders
+                4. Each bullet point should be 1-2 sentences (not too long)
+                5. Content should flow logically from introduction to conclusion
+                6. Include concrete figures, percentages, or data points when appropriate
+                7. Use varied language and structures across slides
+                
+                DO NOT use generic placeholders like "Discuss the impact..." or "Explore the benefits..."
+                INSTEAD provide actual content like "Reduces operational costs by 27% through automation"
+                """
+                
+                try:
+                    print(f"Calling model.generate_content with {len(prompt)} char prompt")
+                    ai_response = model.generate_content(prompt)
+
+                    # Safely extract text from AI response
+                    if (ai_response):
+                        if (hasattr(ai_response, 'text') and ai_response.text):
+                            response_text = ai_response.text
+                            print(f"Successfully generated enhanced content ({len(response_text)} chars)")
+                        elif (isinstance(ai_response, dict) and ai_response.get('text')):
+                            response_text = ai_response['text']
+                            print(f"Successfully extracted text from response dict ({len(response_text)} chars)")
+                        elif (isinstance(ai_response, str)):
+                            response_text = ai_response
+                            print(f"Response was already a string ({len(response_text)} chars)")
+                        else:
+
+                            # Try to convert response to string
+                            try:
+                                response_text = str(ai_response)
+                                print(f"Converted response to string ({len(response_text)} chars)")
+                            except:
+                                print("Could not convert AI response to string")
+                                response_text = text  # Fall back to original text
+                    else:
+                        print("AI response was None, using original text")
+                        response_text = text  # Fall back to original text
+                except Exception as e:
+                    print(f"Error getting AI response: {e}")
+                    response_text = text  # Fall back to original text
+
+                # Now call presentation builder with the extracted text
+                presentation_path, presentation_filename = generate_presentation_from_text(
+                    text=response_text or text,
+                    model=None,  # We've already used the model, so pass None to avoid using it again
+                    title=title,
+                    tone=tone
+                )
+                
+            except Exception as ai_err:
+                print(f"Error using AI for presentation: {ai_err}, falling back to direct text")
+
+                # If AI enhancement fails, use the original text directly
+                presentation_path, presentation_filename = generate_presentation_from_text(
+                    text, None, title, tone
+                )
+            
+            prompt_text = f"Text input: {text[:100]}..." if (len(text) > 100) else text
+        
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'No file or text content provided.'
+            }), 400
+        
+        if (not presentation_path or not presentation_filename or not os.path.exists(presentation_path)):
+            return jsonify({
+                'success': False,
+                'error': 'Failed to generate presentation.'
+            }), 500
+
+        # If the presentation is not in the upload folder, copy it there
+        if (os.path.dirname(presentation_path) != app.config['UPLOAD_FOLDER']):
+            target_path = os.path.join(app.config['UPLOAD_FOLDER'], presentation_filename)
+            shutil.copy2(presentation_path, target_path)
+            presentation_path = target_path
+
+        # Create the download URL and view URL
+        download_url = url_for('download_file', filename=presentation_filename, _external=True)
+        view_url = url_for('view_presentation', filename=presentation_filename, _external=True)
+
+        # Track token usage for this API call (estimate based on content size)
+        if (prompt_text):
+            track_token_usage_for_api_call(user_id, prompt_text, f"Generated presentation: {presentation_filename}")
+        
+        return jsonify({
+            'success': True,
+            'download_url': download_url,
+            'view_url': view_url,
+            'filename': presentation_filename
+        })
+        
+    except Exception as e:
+        print(f"Error generating presentation: {e}")
+        return jsonify({
+            'success': False,
+            'error': str(e)
+        }), 500
+
+@app.route('/presentation_view/<filename>')
+@login_required
+def view_presentation(filename):
+    """
+    Render a presentation with our custom styling in the browser
+    
+    This route loads a previously generated PowerPoint presentation
+    and renders it using our custom presentation viewer template
+    """
+    try:
+        import pptx
+        from pptx.enum.shapes import MSO_SHAPE_TYPE
+        import base64
+        from io import BytesIO
+        from PIL import Image
+
+        # Get the file path
+        file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+        
+        if (not os.path.exists(file_path)):
+            flash(f'Presentation file not found: {filename}', 'danger')
+            return redirect(url_for('presentation_builder'))
+
+        # Extract content from PowerPoint
+        presentation = pptx.Presentation(file_path)
+
+        # Extract the presentation title from the first slide if available
+        presentation_title = "Presentation"
+        if (len(presentation.slides) > 0):
+            title_slide = presentation.slides[0]
+            for shape in title_slide.shapes:
+                if (shape.has_text_frame and shape.text.strip()):
+                    presentation_title = shape.text.strip()
+                    break
+
+        # Extract content from slides
+        slides = []
+
+        # Helper function to extract text from a shape
+        def extract_text_from_shape(shape):
+            if (shape.has_text_frame):
+                return shape.text.strip()
+            return ""
+            
+        # Helper function to extract image from a shape
+        def extract_image_from_shape(shape):
+            try:
+                if (shape.shape_type == MSO_SHAPE_TYPE.PICTURE):
+                    image_bytes = shape.image.blob
+                    image_format = shape.image.ext.lower()
+
+                    # Convert image to base64 for embedding
+                    image_base64 = base64.b64encode(image_bytes).decode('utf-8')
+                    return (f"data:image/{image_format};base64,{image_base64}", f"Image from slide")
+            except Exception as img_err:
+                print(f"Error extracting image: {img_err}")
+            return (None, None)
+
+        # Process all slides
+        for slide_index, slide in enumerate(presentation.slides):
+            if (slide_index == 0):
+
+                # Skip the title slide as we handle it separately
+                continue
+                
+            slide_title = ""
+            points = []
+            images = []
+            layout_type = "standard"  # Default layout
+
+            # First, check for the slide title
+            for shape in slide.shapes:
+                if (shape.has_text_frame and not slide_title):
+                    text = shape.text.strip()
+                    if (text):
+                        slide_title = text
+                        break
+
+            # Then extract content based on shape types
+            for shape in slide.shapes:
+
+                # Extract text content
+                if (shape.has_text_frame):
+                    text = extract_text_from_shape(shape)
+                    if (text and (text != slide_title)):
+
+                        # Extract bullet points from text
+                        text_lines = text.split('\n')
+                        for line in text_lines:
+                            line = line.strip()
+                            if (line):
+
+                                # Determine bullet point indentation level
+                                level = 0
+                                if (line.startswith('  ') or line.startswith('\t')):
+                                    level = 1
+                                if (line.startswith('    ') or line.startswith('\t\t')):
+                                    level = 2
+
+                                # Clean up the line
+                                clean_line = line.lstrip('•-*> \t')
+
+                                # Add to points
+                                points.append({
+                                    'text': clean_line, 
+                                    'is_bullet': True, 
+                                    'level': level
+                                })
+
+                # Extract images
+                elif (shape.shape_type == MSO_SHAPE_TYPE.PICTURE):
+                    img_src, img_alt = extract_image_from_shape(shape)
+                    if (img_src):
+                        images.append({
+                            'src': img_src,
+                            'alt': img_alt
+                        })
+
+            # Determine slide layout based on content
+            if (images and (len(images) == 1)):
+
+                # If there's one image, use a split layout
+                layout_type = "image-right"
+            elif (images and (len(images) > 1)):
+
+                # If there are multiple images, use a gallery layout
+                layout_type = "gallery"
+            elif (points and (len(points) >= 6)):
+
+                # If there are many points, use a two-column layout
+                layout_type = "two-column"
+
+            # Create slide object
+            slides.append({
+                'title': (slide_title or f"Slide {slide_index}"),
+                'points': points,
+                'images': images,
+                'layout': layout_type
+            })
+
+        # If we couldn't extract any content, create a default slide
+        if (not slides):
+            slides = [{
+                'title': "No Content Found",
+                'points': [
+                    {'text': "This presentation doesn't contain any extractable content.", 'is_bullet': True, 'level': 0},
+                    {'text': "Try creating a new presentation with more text content.", 'is_bullet': True, 'level': 0}
+                ],
+                'images': [],
+                'layout': "standard"
+            }]
+
+        # Define available themes for the selector
+        theme_options = ['modern', 'dark', 'light', 'gradient', 'minimal']
+
+        # Render the template with the extracted content
+        return render_template(
+            'presentation_view.html',
+            presentation_title=presentation_title,
+            slides=slides,
+            theme_options=theme_options
+        )
+        
+    except Exception as e:
+        print(f"Error viewing presentation: {e}")
+        flash(f'Error viewing presentation: {str(e)}', 'danger')
+        return redirect(url_for('presentation_builder'))
+
+# Routes for referral system
+@app.route('/api/referral/code', methods=['GET'])
+@login_required
+def api_get_referral_code():
+    """Get the user's referral code with logging for debugging."""
+    user_id = session.get('user_id')
+    print(f"Fetching referral code for user_id: {user_id}")
+    # Generate or get the referral code
+    referral_code = get_referral_code(user_id)
+    
+    if (not referral_code):
+        print("Failed to generate or fetch referral code.")
+        return jsonify({
+            'success': False,
+            'error': 'Failed to generate referral code'
+        }), 500
+        
+    # Generate the referral URL with the code
+    # Use a hardcoded URL since the signup route isn't defined with a name
+    base_url = request.url_root.rstrip('/')
+    referral_url = f"{base_url}/signup?ref={referral_code}"
+    print(f"Referral code: {referral_code}, Referral URL: {referral_url}")
+    
+    return jsonify({
+        'success': True,
+        'referral_code': referral_code,
+        'referral_url': referral_url
+    })
+
+@app.route('/api/referral/stats', methods=['GET'])
+@login_required
+def api_get_referral_stats():
+    """Get the user's referral statistics with improved error handling."""
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            print("No user_id in session when requesting referral stats")
+            return jsonify({
+                'success': False,
+                'error': 'Not authenticated',
+                'total_count': 0,
+                'pending_count': 0
+            }), 401
+        
+        print(f"Fetching referral stats for user_id: {user_id}")
+        stats = get_referral_stats(user_id)
+        print(f"Referral stats: {stats}")
+        
+        return jsonify({
+            'success': True,
+            **stats
+        })
+    except Exception as e:
+        print(f"Error in api_get_referral_stats: {str(e)}")
+        # Return a valid JSON response even in case of error
+        return jsonify({
+            'success': False,
+            'error': str(e),
+            'total_count': 0,
+            'pending_count': 0
+        }), 500
+
+# Add to existing webhook handler to process referrals
+def handle_subscription_purchase(user_id, plan_type='premium'):
+    """
+    Handle a user purchasing a subscription.
+    This is called when a webhook is received from Stripe for a successful payment.
+    """
+
+    # Process referral if user was referred
+    user_ref = db.collection('users').document(user_id)
+    user_doc = user_ref.get()
+    
+    if (user_doc.exists):
+        user_data = user_doc.to_dict()
+
+        # Check if this user was referred (has referral_code_used field)
+        if (user_data.get('referred_by') and user_data.get('referral_code_used')):
+
+            # Complete the referral and reward the referrer
+            complete_referral(user_id, plan_type)
+    
+    return True
+
+# Schedule daily check for expired referral plans
+@app.cli.command('check-expired-referrals')
+def check_expired_referrals_command():
+    """Check for and process expired referral plans."""
+    result = check_expired_referral_plans()
+    if (result):
+        print("Successfully checked and processed expired referral plans.")
+    else:
+        print("Failed to process expired referral plans.")
+    return 0
+
+@app.route('/api/upload', methods=['POST'])
+@login_required
+def api_upload():
+    """    Handle file uploads from the chat interface and store exclusively in Firebase Storage
+    
+    The uploaded file content will be accessible to the LLM for direct analysis and reference
+    in subsequent chat messages. This allows users to ask questions about the uploaded document.
+    
+    This is an optimized version that handles large files better with:
+    1. Proper request timeout handling
+    2. Optimized response sizes
+    3. File sampling for very large files
+    4. Metadata extraction to provide context
+    5. JSON serialization error handling for NumPy types
+    """
+    
+    start_time = datetime.now()
+    print(f"DEBUG: API upload called at {start_time}, request files: {list(request.files.keys())}")
+    try:
+        if 'file' not in request.files:
+            print("ERROR: No file part in the request")
+            return safe_jsonify({'success': False, 'error': 'No file part'}), 400
+        
+        file = request.files['file']
+        print(f"DEBUG: File received: {file.filename}, content type: {file.content_type}")
+        
+        if file.filename == '':
+            print("ERROR: Empty filename")
+            return safe_jsonify({'success': False, 'error': 'No selected file'}), 400
+
+        # Check if the file type is supported
+        allowed_extensions = {'txt', 'pdf', 'docx', 'xlsx', 'csv', 'pptx', 'ppt'}
+        file_ext = os.path.splitext(file.filename)[1][1:].lower()
+        
+        if file_ext not in allowed_extensions:
+            return safe_jsonify({'success': False, 'error': 'File type not supported'}), 400
+              # Check file size (limit to 10MB) - first check request.content_length
+        max_file_size = 10 * 1024 * 1024  # 10MB in bytes
+        if request.content_length and request.content_length > max_file_size:
+            return safe_jsonify({'success': False, 'error': 'File too large (max 10MB)'}), 400
+            
+        # Secondary check on the actual file object
+        try:
+            file.seek(0, os.SEEK_END)
+            file_size = file.tell()
+            file.seek(0)  # Reset file pointer to beginning
+            
+            if file_size > max_file_size:
+                return safe_jsonify({'success': False, 'error': 'File too large (max 10MB)'}), 400
+        except Exception as size_check_error:
+            print(f"Error checking file size: {size_check_error}")
+            # Continue with processing - we'll rely on the request.content_length check
+        
+        # Get user ID for the file ownership
+        user_id = session.get('user_id')
+
+        # Create user-specific upload directory if it doesn't exist
+        user_upload_dir = os.path.join(app.config['UPLOAD_FOLDER'], user_id)
+        os.makedirs(user_upload_dir, exist_ok=True)        # Generate a unique filename to avoid collisions
+        unique_id = str(uuid.uuid4().hex[:8])
+        original_filename = secure_filename(file.filename)
+        stored_filename = f"{unique_id}_{original_filename}"
+
+        # Save the file temporarily to extract text
+        file_path = os.path.join(user_upload_dir, stored_filename)
+        file.save(file_path)
+          # Verify the file was saved successfully
+        if not os.path.exists(file_path):
+            return safe_jsonify({'success': False, 'error': 'Failed to save file temporarily'}), 500
+            
+        print(f"File saved to: {file_path}")
+        
+        # Extract text from the file with enhanced timeout handling and optimization
+        try:
+            # Set a timeout for text extraction to prevent server hanging
+            import signal
+            
+            class TimeoutError(Exception):
+                pass
+                
+            def timeout_handler(signum, frame):
+                raise TimeoutError("Text extraction timed out")
+                
+            # Register timeout handler - 60 seconds should be enough for most files
+            signal.signal(signal.SIGALRM, timeout_handler)
+            signal.alarm(60)
+            
+            try:                # Handle CSV files with our optimized handler
+                file_extension = os.path.splitext(file_path)[1].lower()
+                if file_extension == '.csv':
+                    # Using read_csv_optimized and convert_to_serializable imported at the top of the file
+                    text, metadata, is_truncated, full_content_size = read_csv_optimized(file_path)
+                    # Convert metadata to JSON-serializable types
+                    metadata = convert_to_serializable(metadata)
+                else:
+                    # For other files, use the standard extractor
+                    text = extract_text_from_file(file_path)
+                    is_truncated = False
+                    full_content_size = len(text) if text else 0
+                    metadata = {}
+                
+                # Disable the alarm
+                signal.alarm(0)
+            except TimeoutError:
+                print(f"Text extraction timed out for file: {file.filename}")
+                return safe_jsonify({
+                    'success': False, 
+                    'error': 'Processing this file took too long. Try a smaller or less complex file.',
+                    'is_timeout': True
+                }), 408
+            except Exception as extract_error:
+                print(f"Error during text extraction: {extract_error}")
+                return safe_jsonify({'success': False, 'error': f'Error processing file: {str(extract_error)}'}), 500
+        
+        except Exception as e:
+            print(f"Unexpected error in file processing: {e}")
+            return safe_jsonify({'success': False, 'error': f'Error processing file: {str(e)}'}), 500
+            
+        # Check that text was extracted
+        if not text:
+            return safe_jsonify({'success': False, 'error': 'Could not extract text from the file'}), 400
+        
+        print(f"Successfully extracted text, length: {len(text)} characters")
+        
+        # CRITICAL FIX: Store file content directly in session regardless of storage method
+        # This ensures the content is available immediately for subsequent requests
+        file_id = f"local_{unique_id}"  # Default file ID if Firebase upload fails
+        download_url = None
+        storage_type = 'local'
+        
+        # Set default values for the new parameters if they haven't been set
+        if 'is_truncated' not in locals():
+            is_truncated = False
+        if 'full_content_size' not in locals():
+            full_content_size = len(text) if text else 0
+        if 'metadata' not in locals():
+            metadata = {}
+        
+        # Upload to Firebase Storage if available
+        try:
+
+            # Import the Firebase Storage utility
+            from firebase_utils import upload_file_to_storage
+            import mimetypes
+
+            # Get Firebase Firestore client for storing metadata
+            from firebase_admin import firestore
+            firestore_db = firestore.client()
+
+            # Get content type based on file extension
+            content_type, _ = mimetypes.guess_type(file.filename)
+
+            # Reopen the file for uploading (it was already saved locally)
+            with open(file_path, 'rb') as file_obj:
+
+                # Upload file to Firebase Storage
+                file_info = upload_file_to_storage(file_obj, file.filename, user_id, content_type)
+                
+                if file_info:                    # Store file metadata in Firestore                    # We already have convert_to_serializable imported at the module level
+                        
+                    # Prepare metadata with proper type conversion for Firestore
+                    firestore_metadata = {
+                        'user_id': user_id,
+                        'filename': original_filename,
+                        'stored_filename': stored_filename,
+                        'storage_path': file_info['storage_path'],
+                        'download_url': file_info['download_url'],
+                        'file_id': file_info['file_id'],
+                        'content_type': content_type,
+                        'size': convert_to_serializable(os.path.getsize(file_path)),
+                        'extracted_text_preview': text[:500] + ('...' if len(text) > 500 else ''),
+                        'upload_timestamp': firestore.SERVER_TIMESTAMP
+                    }
+                    
+                    # Add processed metadata if available
+                    if metadata and isinstance(metadata, dict):
+                        # Limit metadata size and ensure it's serializable
+                        serializable_metadata = convert_to_serializable(metadata)
+                        firestore_metadata['metadata'] = serializable_metadata
+                    
+                    # Add the document to Firestore
+                    firestore_db.collection('user_files').add(firestore_metadata)
+                    
+                    # Store the file content and Firebase info in the session for future reference
+                    file_id = file_info['file_id']
+                    download_url = file_info['download_url']
+                    storage_type = 'firebase'
+                      # CRITICAL FIX: Ensure the session has the complete file information
+                    # Using the convert_to_serializable function imported at the module level
+                    # No need to check if it's in locals() since it's imported at the top of the file
+                    
+                    session['current_file'] = {
+                        'filename': original_filename,
+                        'stored_filename': stored_filename,
+                        'file_id': file_info['file_id'],
+                        'storage_path': file_info['storage_path'],
+                        'download_url': file_info['download_url'],
+                        'content': text,  # Store the full content for immediate access
+                        'is_truncated': is_truncated,  # Indicate if content was truncated
+                        'full_content_size': convert_to_serializable(full_content_size),  # Ensure int64 is converted
+                        'metadata': convert_to_serializable(metadata),  # Ensure metadata is serializable
+                        'upload_timestamp': datetime.now().isoformat()
+                    }
+                    session.modified = True  # Force session update
+                    
+                    # Debugging session state
+                    print(f"File info saved in session: {session['current_file'].keys()}")
+                    print(f"File content length in session: {len(session['current_file'].get('content', ''))}")
+                    print(f"File successfully uploaded to Firebase Storage. ID: {file_id}")
+                    # Limit the amount of content sent to the client
+                    MAX_CONTENT_SIZE = 100000  # 100KB max response size
+                    truncated_content = text[:MAX_CONTENT_SIZE] if len(text) > MAX_CONTENT_SIZE else text
+                    is_truncated = len(text) > MAX_CONTENT_SIZE                    # Create response data
+                    response_data = {
+                        'success': True,
+                        'filename': original_filename,
+                        'stored_filename': stored_filename,
+                        'message': 'File processed successfully',
+                        'content_preview': text[:200] + ('...' if len(text) > 200 else ''),
+                        'content': truncated_content,
+                        'is_truncated': is_truncated,
+                        'full_content_size': full_content_size,
+                        'metadata': metadata,  # Include original metadata, safe_jsonify will handle serialization
+                        'download_url': file_info['download_url'],
+                        'file_id': file_info['file_id'],
+                        'storage_type': 'firebase',
+                        'processing_time_ms': int((datetime.now() - start_time).total_seconds() * 1000)
+                    }
+                    
+                    # Use our safe jsonify to handle any non-serializable types
+                    return safe_jsonify(response_data)
+                else:
+
+                    # If Firebase upload failed
+                    print("Firebase Storage upload failed, using local storage only")
+        except Exception as firebase_error:            # If there's any Firebase-specific error, log it and continue with local storage
+            print(f"Firebase storage upload failed: {firebase_error}")
+            # FALLBACK: If Firebase upload failed, still store the file locally and in the session                    # We already have convert_to_serializable imported at the module level
+            
+        session['current_file'] = {
+            'filename': original_filename,
+            'stored_filename': stored_filename,
+            'file_id': file_id,
+            'content': text,  # Store the full content for immediate access
+            'is_truncated': is_truncated,  # Indicate if content was truncated
+            'full_content_size': convert_to_serializable(full_content_size),  # Ensure int64 is converted
+            'metadata': convert_to_serializable(metadata),  # Ensure metadata is serializable
+            'upload_timestamp': datetime.now().isoformat()
+        }
+        session.modified = True  # Force session update
+        
+        print(f"File stored in session with ID: {file_id} (local storage fallback)")
+          # Limit the amount of content sent to the client
+        MAX_CONTENT_SIZE = 100000  # 100KB max response size
+        truncated_content = text[:MAX_CONTENT_SIZE] if len(text) > MAX_CONTENT_SIZE else text
+        is_truncated = len(text) > MAX_CONTENT_SIZE
+        
+        return safe_jsonify({
+            'success': True,
+            'filename': original_filename,
+            'stored_filename': stored_filename,
+            'message': 'File processed successfully',
+            'content_preview': text[:200] + ('...' if len(text) > 200 else ''),
+            'content': truncated_content,
+            'is_truncated': is_truncated,
+            'full_content_size': full_content_size,
+            'metadata': metadata,  # Include extracted metadata
+            'file_id': file_id,
+            'storage_type': storage_type,
+            'processing_time_ms': int((datetime.now() - start_time).total_seconds() * 1000)
+        })
+        
+    except Exception as e:
+        print(f"Error in file processing: {e}")
+        return jsonify({'success': False, 'error': f'Error processing file: {str(e)}'}), 500
+
+def verify_session_state(action_name="Unknown", print_details=True):
+    """
+    Helper function to verify and log session state.
+    Used for debugging session persistence issues.
+    
+    Args:
+        action_name (str): Name of the action being performed (for logging)
+        print_details (bool): Whether to print detailed debug information
+        
+    Returns:
+        dict: Dictionary with session verification information
+    """
+    result = {
+        'has_current_file': 'current_file' in session,
+        'content_length': 0,
+        'has_file_id': False,
+        'session_keys': list(session.keys()),
+        'session_modified': session.modified,
+        'session_cookie': request.cookies.get('session', 'no-session-cookie')[:10] + '...',
+        'timestamp': datetime.now().isoformat()
+    }
+    
+    if result['has_current_file']:
+        current_file = session['current_file']
+        result['content_length'] = len(current_file.get('content', ''))
+        result['file_id'] = current_file.get('file_id')
+        result['filename'] = current_file.get('filename')
+        result['has_file_id'] = bool(result['file_id'])
+        result['file_keys'] = list(current_file.keys())
+    
+    if print_details:
+        print(f"[SESSION VERIFY:{action_name}] Has current_file: {result['has_current_file']}")
+        if result['has_current_file']:
+            print(f"[SESSION VERIFY:{action_name}] File ID: {result.get('file_id')}")
+            print(f"[SESSION VERIFY:{action_name}] Filename: {result.get('filename')}")
+            print(f"[SESSION VERIFY:{action_name}] Content length: {result['content_length']} bytes")
+            print(f"[SESSION VERIFY:{action_name}] File keys: {result.get('file_keys', [])}")
+        print(f"[SESSION VERIFY:{action_name}] Session keys: {result['session_keys']}")
+        print(f"[SESSION VERIFY:{action_name}] Modified flag: {result['session_modified']}")
+        print(f"[SESSION VERIFY:{action_name}] Session cookie: {result['session_cookie']}")
+    
+    return result
+
+@app.route('/api/check-login-status', methods=['GET'])
+def check_login_status():
+    """API endpoint to check if a user is logged in"""
+    user_id = session.get('user_id')
+    
+    return safe_jsonify({
+        'loggedIn': bool(user_id),
+        'userId': user_id or None
+    })
+
+@app.route('/api/user-chats', methods=['GET'])
+@login_required
+def get_user_chats_api():
+    """API endpoint to get all chat sessions for a user"""
+    user_id = session.get('user_id')
+    
+    # Import chat utility functions
+    from firebase_chat_utils import get_user_chats
+    
+    # Get chat sessions
+    chats = get_user_chats(user_id)
+    
+    return jsonify({
+        'success': True,
+        'chats': chats
+    })
+
+@app.route('/api/save-chat', methods=['POST'])
+@login_required
+def save_chat_api():
+    """API endpoint to save a chat session"""
+    user_id = session.get('user_id')
+    data = request.json
+    
+    # Get chat data from request
+    chat = data.get('chat')
+    if not chat:
+        return jsonify({
+            'success': False,
+            'error': 'No chat data provided'
+        })
+    
+    # Import chat utility functions
+    from firebase_chat_utils import save_chat_session
+    
+    # Save chat session
+    success = save_chat_session(user_id, chat)
+    
+    return jsonify({
+        'success': success,
+        'error': None if success else 'Failed to save chat session'
+    })
+
+@app.route('/api/delete-chat', methods=['POST'])
+@login_required
+def delete_chat_api():
+    """API endpoint to delete a chat session"""
+    user_id = session.get('user_id')
+    data = request.json
+    
+    # Get chat ID from request
+    chat_id = data.get('chatId')
+    if not chat_id:
+        return jsonify({
+            'success': False,
+            'error': 'No chat ID provided'
+        })
+    
+    # Import chat utility functions
+    from firebase_chat_utils import delete_chat_session
+    
+    # Delete chat session
+    success = delete_chat_session(user_id, chat_id)
+    
+    return jsonify({
+        'success': success,
+        'error': None if success else 'Failed to delete chat session'
+    })
+
+@app.route('/api/sync-chats', methods=['POST'])
+@login_required
+def sync_chats_api():
+    """API endpoint to sync all chat sessions between client and server"""
+    user_id = session.get('user_id')
+    data = request.json
+    
+    # Get chat data from request
+    client_chats = data.get('chats', [])
+    if not client_chats:
+        return jsonify({
+            'success': False,
+            'error': 'No chat data provided'
+        })
+    
+    # Import chat utility functions
+    from firebase_chat_utils import save_chat_session, get_user_chats
+    
+    try:
+        # First get existing server chats
+        server_chats = get_user_chats(user_id)
+        
+        # Helper to parse timestamp values into datetime
+        def parse_ts(ts_val):
+            if isinstance(ts_val, str):
+                try:
+                    return datetime.fromisoformat(ts_val)
+                except Exception:
+                    return None
+            if hasattr(ts_val, 'to_datetime'):
+                return ts_val.to_datetime()
+            if hasattr(ts_val, 'seconds'):
+                return datetime.fromtimestamp(ts_val.seconds + (ts_val.nanos / 1e9))
+            if isinstance(ts_val, datetime):
+                return ts_val
+            return None
+        
+        # Create a dictionary of server chats by ID for quick lookup
+        server_chat_dict = {chat.get('id'): chat for chat in server_chats}
+        
+        # Track success status
+        success_count = 0
+        total_count = len(client_chats)
+        
+        # For each client chat, save to server if newer
+        for client_chat in client_chats:
+            chat_id = client_chat.get('id')
+            
+            # Skip if no ID
+            if not chat_id:
+                continue
+                
+            # Compare timestamps safely as datetimes
+            if chat_id in server_chat_dict:
+                server_ts = parse_ts(server_chat_dict[chat_id].get('timestamp'))
+                client_ts = parse_ts(client_chat.get('timestamp'))
+                # Only upload if client chat is newer or unable to parse
+                if server_ts is None or client_ts is None or client_ts >= server_ts:
+                    if save_chat_session(user_id, client_chat):
+                        success_count += 1
+            else:
+                # Chat doesn't exist on server, save it
+                if save_chat_session(user_id, client_chat):
+                    success_count += 1        
+        return jsonify({
+            'success': True,
+            'syncedCount': success_count,
+            'totalCount': total_count
+        })
+    
+    except Exception as e:
+        print(f"Error syncing chats: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'Error syncing chats: {str(e)}'
+        })
+
+@app.route('/login')
+def login():
+    """Login page for users"""
+    # Get the next URL parameter for redirect after login (default to chat page)
+    next_url = request.args.get('next', url_for('unified_chat'))
+    
+    # Log session state for debugging
+    print(f"[LOGIN ROUTE] Session keys: {list(session.keys())}")
+    print(f"[LOGIN ROUTE] User ID in session: {session.get('user_id')}")
+    print(f"[LOGIN ROUTE] Explicitly logged out: {session.get('explicitly_logged_out', False)}")
+    print(f"[LOGIN ROUTE] Session cookie present: {'session' in request.cookies}")
+    print(f"[LOGIN ROUTE] Next URL: {next_url}")
+    
+    # Clear any explicit logout flag since user is explicitly trying to login
+    if 'explicitly_logged_out' in session:
+        print(f"[LOGIN ROUTE] Clearing explicit logout flag")
+        del session['explicitly_logged_out']
+        session.modified = True
+    
+    # If user is already logged in and has a valid session, redirect to the next URL
+    if 'user_id' in session and session.get('user_id'):
+        try:
+            if validate_session():
+                print(f"[LOGIN ROUTE] Valid session found for user {session.get('user_id')}, redirecting to {next_url}")
+                return redirect(next_url)
+            else:
+                # If session validation fails, clear the session
+                print(f"[LOGIN ROUTE] Invalid session for user {session.get('user_id')}, clearing session")
+                session.clear()
+                flash('Your session has expired. Please log in again.', 'warning')
+        except Exception as e:
+            print(f"[LOGIN ROUTE] Error validating session: {e}")
+            import traceback
+            print(f"[LOGIN ROUTE] Error traceback: {traceback.format_exc()}")
+            session.clear()
+            flash('An error occurred during session validation. Please log in again.', 'danger')
+    
+    # Get Firebase configuration for client-side initialization
+    firebase_config = {
+        'firebase_api_key': os.environ.get('FIREBASE_API_KEY', ''),
+        'firebase_auth_domain': os.environ.get('FIREBASE_AUTH_DOMAIN', ''),
+        'firebase_project_id': os.environ.get('FIREBASE_PROJECT_ID', ''),
+        'firebase_storage_bucket': os.environ.get('FIREBASE_STORAGE_BUCKET', ''),
+        'firebase_messaging_sender_id': os.environ.get('FIREBASE_MESSAGING_SENDER_ID', ''),
+        'firebase_app_id': os.environ.get('FIREBASE_APP_ID', '')
+    }
+    
+    return render_template('login.html', next=next_url, **firebase_config)
+
+@app.route('/signup')
+def signup():
+    """Signup page for new users"""
+    # If user is already logged in, redirect to home
+    if 'user_id' in session and session.get('user_id'):
+        return redirect(url_for('index'))
+    
+    # Clear any explicit logout flag since user is explicitly trying to sign up
+    if 'explicitly_logged_out' in session:
+        print(f"[SIGNUP ROUTE] Clearing explicit logout flag")
+        del session['explicitly_logged_out']
+        session.modified = True
+    
+    # Make sure any invalid session is cleared
+    session.clear()
+      # Get Firebase configuration for client-side initialization
+    firebase_config = {
+        'firebase_api_key': os.environ.get('FIREBASE_API_KEY', ''),
+        'firebase_auth_domain': os.environ.get('FIREBASE_AUTH_DOMAIN', ''),
+        'firebase_project_id': os.environ.get('FIREBASE_PROJECT_ID', ''),
+        'firebase_storage_bucket': os.environ.get('FIREBASE_STORAGE_BUCKET', ''),
+        'firebase_messaging_sender_id': os.environ.get('FIREBASE_MESSAGING_SENDER_ID', ''),
+        'firebase_app_id': os.environ.get('FIREBASE_APP_ID', '')
+    }
+    return render_template('signup.html', **firebase_config)
+
+@app.route('/logout')
+def logout():
+    """Logout a user and clear their session"""    # Clear all session data
+    session.clear()
+    # Set an explicit logout flag in the session to prevent auto-relogin
+    session['explicitly_logged_out'] = True
+    session.modified = True
+    flash('You have been successfully logged out.', 'success')
+    # Redirect to index and delete session cookie to ensure full logout
+    resp = redirect(url_for('index'))
+    resp.delete_cookie(app.config.get('SESSION_COOKIE_NAME'))
+    # Set additional response headers to prevent caching
+    resp.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, private'
+    resp.headers['Pragma'] = 'no-cache'
+    resp.headers['Expires'] = '0'
+    resp.headers['X-Firebase-Reset'] = 'true'
+    return resp
+
+@app.route('/logout_cleanup')
+def logout_cleanup():
+    """Server-side logout handler that renders a page with proper Firebase cleanup"""
+    # Get user_id before clearing session for token revocation
+    user_id = session.get('user_id')
+    
+    # Clear all session data
+    session.clear()
+    
+    # Set an explicit logout flag in the session to prevent auto-relogin
+    session['explicitly_logged_out'] = True
+    session.modified = True
+    
+    # Log the logout page request
+    print(f"User accessing logout page to clean up Firebase auth state, user_id: {user_id}")
+    
+    # Attempt to revoke the user's Firebase tokens if we have a user_id
+    if user_id:
+        try:
+            from firebase_auth_utils import revoke_user_tokens
+            token_revocation_result = revoke_user_tokens(user_id=user_id)
+            print(f"Token revocation for user {user_id} result: {token_revocation_result}")
+        except Exception as e:
+            print(f"Error revoking tokens for user {user_id}: {str(e)}")
+    
+    # After cleanup, redirect directly to the main (index) page
+    response = redirect(url_for('index'))
+    
+    # Set cache control headers to prevent caching
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, private, max-age=0'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    
+    # Set a header to instruct the client to completely reset Firebase auth
+    response.headers['X-Firebase-Reset'] = 'true'
+    response.headers['X-Clear-Firebase-Auth'] = 'true'
+    response.headers['X-Force-Logout'] = 'true'
+    
+    # Delete the session cookie
+    response.delete_cookie(app.config.get('SESSION_COOKIE_NAME'))
+    
+    return response
+
+@app.route('/auth-diagnostics')
+def auth_diagnostics():
+    """Diagnostic page for Firebase authentication issues"""
+    # Get session data
+    session_data = {k: v for k, v in session.items()}
+    
+    # Check if user is logged in according to Flask session
+    is_logged_in = 'user_id' in session
+    
+    # Check if enhanced diagnostics are requested
+    use_enhanced = request.args.get('enhanced', 'false').lower() == 'true'
+    template = 'auth_diagnostics_enhanced.html' if use_enhanced else 'auth_diagnostics.html'
+    
+    # Check if setting logout flag was requested
+    if request.args.get('set_logout_flag', 'false').lower() == 'true':
+        session['explicitly_logged_out'] = True
+        session.modified = True
+    
+    return render_template(
+        template, 
+        is_logged_in=is_logged_in,
+        session_data=session_data,
+        current_time=datetime.datetime.now().timestamp()
+    )
+
+@app.route('/forgot-password')
+def forgot_password():
+    """Show forgot password page"""
+    if 'user_id' in session:
+        return redirect(url_for('index'))
+    
+    # Get Firebase configuration for client-side initialization
+    firebase_config = {
+        'firebase_api_key': os.environ.get('FIREBASE_API_KEY', ''),
+        'firebase_auth_domain': os.environ.get('FIREBASE_AUTH_DOMAIN', ''),
+        'firebase_project_id': os.environ.get('FIREBASE_PROJECT_ID', ''),
+        'firebase_storage_bucket': os.environ.get('FIREBASE_STORAGE_BUCKET', ''),
+        'firebase_messaging_sender_id': os.environ.get('FIREBASE_MESSAGING_SENDER_ID', ''),
+        'firebase_app_id': os.environ.get('FIREBASE_APP_ID', '')
+    }
+    
+    return render_template('forgot_password.html', **firebase_config)
+
+@app.route('/api/server-health', methods=['GET'])
+def server_health():
+    """Simple endpoint to check server health and configuration"""
+    try:
+        firebase_initialized = len(firebase_admin._apps) > 0
+    except:
+        firebase_initialized = False
+        
+    # Check environment variables
+    env_vars = {
+        'FIREBASE_API_KEY': bool(os.environ.get('FIREBASE_API_KEY')),
+        'FIREBASE_AUTH_DOMAIN': bool(os.environ.get('FIREBASE_AUTH_DOMAIN')),
+        'FIREBASE_PROJECT_ID': bool(os.environ.get('FIREBASE_PROJECT_ID')),
+        'FIREBASE_STORAGE_BUCKET': bool(os.environ.get('FIREBASE_STORAGE_BUCKET')),
+        'GOOGLE_APPLICATION_CREDENTIALS': bool(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS')),
+        'GOOGLE_APPLICATION_CREDENTIALS_PATH': os.environ.get('GOOGLE_APPLICATION_CREDENTIALS'),
+        'CREDENTIALS_FILE_EXISTS': os.path.exists(os.environ.get('GOOGLE_APPLICATION_CREDENTIALS', ''))
+    }
+    
+    # Check important paths
+    file_paths = {
+        'current_working_directory': os.getcwd(),
+        'template_dir': os.path.join(os.getcwd(), 'templates'),
+        'template_dir_exists': os.path.exists(os.path.join(os.getcwd(), 'templates')),
+        'templates_contents': os.listdir(os.path.join(os.getcwd(), 'templates')) if os.path.exists(os.path.join(os.getcwd(), 'templates')) else []
+    }
+    
+    # Check Firebase credential files
+    cred_files = [f for f in os.listdir('.') if f.endswith('.json') and ('firebase' in f.lower() or 'service-account' in f.lower())]
+    
+    return jsonify({
+        'status': 'ok',
+        'timestamp': datetime.now().isoformat(),
+        'firebase_initialized': firebase_initialized,
+        'environment': env_vars,
+        'python_version': sys.version,
+        'flask_config': {
+            'debug': app.debug,
+            'testing': app.testing,
+            'secret_key_set': bool(app.secret_key)
+        },
+        'paths': file_paths,
+        'credential_files_found': cred_files,
+        'auth_enabled': True
+    })
+
+@app.route('/auth-error')
+def auth_error():
+    """Show an error page when authentication is not working properly"""
+    error_type = request.args.get('type', 'general')
+    error_message = request.args.get('message', 'An unknown authentication error occurred')
+    
+    return render_template('auth_error.html', 
+                          error_type=error_type, 
+                          error_message=error_message)
+
+# Authentication API endpoints
+@app.route('/api/auth/google', methods=['POST'])
+def auth_with_google():
+    """
+    Authenticate user with Google OAuth token
+    This is called from the client-side after Google sign-in
+    """
+    data = request.json
+    id_token = data.get('idToken')
+    referral_code = data.get('referralCode')
+    
+    if not id_token:
+        return jsonify({'error': 'No token provided'}), 400
+    
+    # Clear any explicit logout flag when attempting to login
+    if 'explicitly_logged_out' in session:
+        del session['explicitly_logged_out']
+        session.modified = True
+    
+    # Use the common handler for Google authentication
+    from firebase_auth_utils import handle_google_authentication
+    response, status_code = handle_google_authentication(id_token, referral_code)
+    return response, status_code
+
+@app.route('/api/auth/email', methods=['POST'])
+def auth_with_email():
+    """
+    Authenticate user with Firebase email/password
+    This is called from the client-side after email/password sign-in
+    """
+    data = request.json
+    id_token = data.get('idToken')
+    
+    if not id_token:
+        return jsonify({'error': 'No token provided'}), 400
+    
+    # Clear any explicit logout flag when attempting to login
+    if 'explicitly_logged_out' in session:
+        del session['explicitly_logged_out']
+        session.modified = True
+    
+    try:
+        # Verify the ID token from Firebase
+        from firebase_admin import auth
+        decoded_token = auth.verify_id_token(id_token)
+        uid = decoded_token['uid']
+        
+        # Check if email is verified
+        try:
+            user = auth.get_user(uid)
+            if not user.email_verified:
+                return jsonify({'error': 'Please verify your email before logging in.'}), 400
+        except auth.UserNotFoundError:
+            return jsonify({'error': 'User not found'}), 404
+        
+        # Set session data
+        session.permanent = True
+        session['user_id'] = uid
+        session['user_email'] = user.email
+        session['user_name'] = user.display_name
+        session['user_picture'] = user.photo_url
+        session['login_time'] = time.time()
+        
+        # Force session to be saved
+        session.modified = True
+        
+        return jsonify({'success': True}), 200
+        
+    except auth.InvalidIdTokenError:
+        return jsonify({'error': 'Invalid token'}), 401
+    except Exception as e:
+        print(f"Error in email authentication: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/auth/signup', methods=['POST'])
+def auth_signup():
+    """
+    Handle email/password signup
+    This is called from the client-side after creating a Firebase account
+    """
+    data = request.json
+    id_token = data.get('idToken')
+    name = data.get('name')
+    referral_code = data.get('referralCode')
+    
+    if not id_token:
+        return jsonify({'error': 'No token provided'}), 400
+    
+    # Clear any explicit logout flag when attempting to signup
+    if 'explicitly_logged_out' in session:
+        del session['explicitly_logged_out']
+        session.modified = True
+    
+    try:
+        # Verify the ID token from Firebase
+        from firebase_admin import auth, firestore
+        decoded_token = auth.verify_id_token(id_token)
+        uid = decoded_token['uid']
+        
+        # Get user data
+        try:
+            user = auth.get_user(uid)
+            
+            # Create user document in Firestore
+            db.collection('users').document(uid).set({
+                'email': user.email,
+                'display_name': name or user.display_name or '',
+                'photo_url': user.photo_url or '',
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'plan': 'free',
+                'email_verified': user.email_verified
+            })
+            
+            # Handle referral if provided
+            if referral_code:
+                from referral_utils import track_referral
+                track_referral(referral_code, uid)
+            
+            return jsonify({'success': True}), 200
+            
+        except auth.UserNotFoundError:
+            return jsonify({'error': 'User not found'}), 404
+            
+    except auth.InvalidIdTokenError:
+        return jsonify({'error': 'Invalid token'}), 401
+    except Exception as e:
+        print(f"Error in signup: {e}")
+        return jsonify({'error': str(e)}), 400
+
+@app.route('/api/auth/signout', methods=['POST'])
+def signout():
+    """Sign out the current user"""
+    # Get user_id before clearing the session for logging purposes
+    user_id = session.get('user_id', 'unknown')
+    session_id = session.get('session_id', 'unknown')
+    
+    # Clear all session data
+    session.clear()
+    
+    # Set an explicit logout flag in the session to prevent auto-relogin
+    session['explicitly_logged_out'] = True
+    session.modified = True
+    
+    # Log the signout attempt for debugging with better visibility
+    print(f"User logout requested. User ID: {user_id}, Session ID: {session_id}")
+    
+    # Try to revoke Firebase tokens if possible
+    try:
+        from firebase_auth_utils import revoke_user_tokens
+        if user_id != 'unknown':
+            # Attempt to revoke all Firebase tokens for this user
+            revoke_success = revoke_user_tokens(user_id=user_id)
+            print(f"Firebase token revocation for user {user_id}: {'Success' if revoke_success else 'Failed'}")
+    except Exception as e:
+        print(f"Error revoking Firebase tokens during logout: {e}")
+    
+    response = jsonify({
+        'success': True,
+        'message': 'Successfully signed out',
+        'timestamp': datetime.datetime.now().isoformat()
+    })
+    
+    # Delete the session cookie from the client
+    response.delete_cookie(app.config.get('SESSION_COOKIE_NAME'))
+      # Set cache headers to prevent browsers from caching the logged-out state
+    response.headers['Cache-Control'] = 'no-cache, no-store, must-revalidate, private'
+    response.headers['Pragma'] = 'no-cache'
+    response.headers['Expires'] = '0'
+    response.headers['X-Firebase-Reset'] = 'true'
+    
+    # Add additional headers to instruct the client to clear Firebase auth
+    response.headers['X-Clear-Firebase-Auth'] = 'true'
+    
+    # Set an explicit header to indicate successful Firebase reset
+    response.headers['X-Firebase-Reset-Success'] = 'true'
+    
+    return response, 200
+
+# Note: /logout_cleanup route is defined above around line 4473
+
+# Log the logout page request
+print(f"User accessing logout page to clean up Firebase auth state")
+    
+    # Note: /logout_cleanup route is defined above around line 4473
+
+@app.route('/api/auth/session', methods=['GET'])
+def check_session():
+    """Check if the user is authenticated and return session info"""
+    # Log request information for debugging
+    print(f"[CHECK SESSION] Session keys: {list(session.keys())}")
+    print(f"[CHECK SESSION] User ID: {session.get('user_id', 'None')}")
+    print(f"[CHECK SESSION] Explicitly logged out: {session.get('explicitly_logged_out', False)}")
+    
+    # Check if user has explicitly logged out
+    if session.get('explicitly_logged_out'):
+        print(f"[CHECK SESSION] User explicitly logged out")
+        return jsonify({
+            'authenticated': False,
+            'explicitly_logged_out': True
+        }), 200
+    
+    if validate_session():
+        return jsonify({
+            'authenticated': True,
+            'user': {
+                'id': session.get('user_id'),
+                'email': session.get('user_email'),
+                'name': session.get('user_name'),
+                'picture': session.get('user_picture')
+            }
+        }), 200
+    else:
+        return jsonify({
+            'authenticated': False
+        }), 200
+
+@app.route('/api/topic-presentation', methods=['POST'])
+@login_required
+def create_presentation_from_topic():
+    """
+    Create a PowerPoint presentation from a topic using LLM to generate content
+    
+    POST Parameters:
+        topic (str): The topic to create a presentation about
+        tone (str, optional): Presentation tone/style (professional, academic, casual)
+        
+    Returns:
+        JSON with download link to the generated presentation and view link for browser viewing
+    """
+    # Check if user has exceeded their token limit
+    user_id = session.get('user_id')
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if (not can_use):
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if (plan == 'free'):
+            return jsonify({
+                'success': False,
+                'error': 'You have reached your daily token limit. Please upgrade to premium for a higher limit.'
+            }), 403
+        else:
+            return jsonify({
+                'success': False,
+                'error': 'You have reached your daily token limit. Please try again tomorrow.'
+            }), 403
+
+    # Get topic and presentation style preferences
+    topic = request.form.get('topic')
+    tone = request.form.get('tone', 'professional')
+
+    if not topic or not topic.strip():
+        return jsonify({
+            'success': False,
+            'error': 'No topic provided. Please specify a presentation topic.'
+        }), 400
+
+    # Ensure tone is valid
+    if tone not in ['professional', 'academic', 'casual']:
+        tone = 'professional'
+    
+    try:
+        # Use LLM to generate presentation content based on the topic
+        presentation_path, presentation_filename = generate_presentation_from_topic(
+            topic=topic, 
+            model=model,  # Use the globally defined Gemini model
+            tone=tone
+        )
+        
+        print(f"Generated presentation from topic: path={presentation_path}, filename={presentation_filename}")
+        
+        # Copy the file to the uploads directory for serving
+        final_path = os.path.join(app.config['UPLOAD_FOLDER'], presentation_filename)
+        shutil.copy2(presentation_path, final_path)
+        
+        # Track token usage for this API call
+        track_token_usage_for_api_call(
+            user_id, 
+            f"Topic: {topic}", 
+            f"Generated presentation: {presentation_filename}"
+        )
+        
+        # Create download and view URLs
+        download_url = url_for('download_file', filename=presentation_filename, _external=True)
+        view_url = url_for('view_presentation', filename=presentation_filename, _external=True)
+        
+        print(f"Sending presentation response with URLs: download={download_url}, view={view_url}")
+        
+        return jsonify({
+            'success': True,
+            'download_url': download_url,
+            'view_url': view_url,
+            'filename': presentation_filename,
+            'topic': topic
+        })
+        
+    except Exception as e:
+        print(f"Error generating presentation from topic: {e}")
+        return jsonify({
+            'success': False,
+            'error': f'Error generating presentation: {str(e)}'
+        }), 500
+
+@app.template_filter('timestamp_to_date')
+def timestamp_to_date(timestamp):
+    """Convert a timestamp to a formatted date string"""
+    from datetime import datetime
+    return datetime.fromtimestamp(timestamp).strftime('%Y-%m-%d %H:%M:%S')
+
+# Removed duplicate route for /api/auth/session
+# This route is already defined above around line 4754
+
+@app.route('/api/list-files', methods=['GET'])
+@login_required
+def api_list_files():
+    """
+    List all files uploaded by the current user from Firebase Storage.
+    """
+    try:
+        user_id = session.get('user_id')
+        if not user_id:
+            print(f"ERROR: User not authenticated in api_list_files")
+            return jsonify({'success': False, 'error': 'Not authenticated'}), 401
+            
+        print(f"DEBUG: api_list_files called for user_id: {user_id}")
+        
+        from firebase_utils import get_user_files, is_firebase_available
+        
+        # Check if Firebase is properly initialized
+        firebase_available = is_firebase_available()
+        print(f"DEBUG: Firebase available: {firebase_available}")
+        
+        files = get_user_files(user_id)
+        print(f"DEBUG: Retrieved {len(files)} files for user")
+        
+        return jsonify({'success': True, 'files': files})
+    except Exception as e:
+        print(f"Error in api_list_files: {e}")
+        import traceback
+        traceback.print_exc()
+        return jsonify({'success': False, 'error': str(e)}), 500
+
+@app.route('/api/translate', methods=['POST'])
+@login_required
+def translate_text():
+    """API endpoint for translating text between languages"""
+    # No need to import Google Cloud Translation - we'll use Gemini directly
+    
+    # Double check that the user is properly authenticated
+    if not session.get('user_id'):
+        # Clear any invalid session data
+        session.clear()
+        return jsonify({
+            'response': "<p>You need to be logged in to use the translation feature. Please login first.</p>",
+            'error': 'authentication_required'
+        }), 401
+    
+    data = request.json
+    text = data.get('text', '')
+    source_language = data.get('source_language', 'auto')
+    target_language = data.get('target_language', 'en')
+    user_id = session.get('user_id')
+    
+    if not text:
+        return jsonify({
+            'response': "<p>Please provide text to translate.</p>",
+            'error': 'no_text_provided'
+        }), 400
+        
+    # Standardize target language codes for the gemini model
+    language_code_map = {
+        'english': 'en',
+        'polish': 'pl',
+        'azerbaijani': 'az',
+        'azeri': 'az',
+        'spanish': 'es',
+        'french': 'fr',
+        'german': 'de',
+        'italian': 'it',
+        'portuguese': 'pt',
+        'russian': 'ru',
+        'japanese': 'ja',
+        'chinese': 'zh',
+        'arabic': 'ar',
+        'hindi': 'hi',
+        'turkish': 'tr',
+        # Additional languages
+        'korean': 'ko',
+        'dutch': 'nl',
+        'swedish': 'sv',
+        'greek': 'el',
+        'finnish': 'fi',
+        'danish': 'da',
+        'norwegian': 'no',
+        'czech': 'cs',
+        'hungarian': 'hu'
+    }
+    
+    # Convert full language names to ISO codes if necessary
+    original_target_language = target_language
+    if isinstance(target_language, str) and target_language.lower() in language_code_map:
+        target_language = language_code_map[target_language.lower()]
+    # else keep it as is for Gemini to interpret
+    
+    # Check if user has exceeded their token limit
+    can_use, remaining_tokens = check_user_token_limit(user_id)
+    
+    if not can_use:
+        # User has exceeded their token limit
+        subscription = get_user_subscription(user_id)
+        plan = subscription.get('plan', 'free')
+        
+        if plan == 'free':
+            upgrade_message = {
+                'en': "You've reached your daily free token limit. Please upgrade to our Premium plan for higher limits.",
+                'pl': "Osiągnąłeś dzienny limit darmowych tokenów. Przejdź na plan Premium, aby uzyskać wyższe limity.",
+                'az': "Gündəlik pulsuz token limitinə çatmısınız. Daha yüksək limitlər üçün Premium planımıza yüksəldin."
+            }
+            return jsonify({
+                'response': upgrade_message.get(g.current_language, upgrade_message['en']),
+                'limit_reached': True,
+                'plan': plan
+            })
+    
+    try:
+        # Convert language names to human-readable format for Gemini
+        target_lang_human = target_language
+        # Convert ISO codes to full language names for better Gemini understanding
+        iso_to_language = {
+            'en': 'English',
+            'pl': 'Polish',
+            'az': 'Azerbaijani',
+            'es': 'Spanish',
+            'fr': 'French',
+            'de': 'German',
+            'it': 'Italian',
+            'pt': 'Portuguese',
+            'ru': 'Russian',
+            'ja': 'Japanese',
+            'zh': 'Chinese',
+            'ar': 'Arabic',
+            'hi': 'Hindi',
+            'tr': 'Turkish'
+        }
+        
+        # Convert ISO code to full language name if applicable
+        if target_language in iso_to_language:
+            target_lang_human = iso_to_language[target_language]
+            
+        # Use Gemini for translation with a more detailed prompt
+        translation_prompt = f"""
+Translate the following text to {target_lang_human}:
+
+"{text}"
+
+Provide ONLY the translation, with no explanations, notes, or any text other than the translation.
+"""
+        
+        model = genai.GenerativeModel(
+            model_name="gemini-1.5-pro",
+            generation_config={
+                "temperature": 0.1,
+                "top_p": 0.95,
+                "top_k": 0,
+                "max_output_tokens": 1024,
+            }
+        )
+        
+        # Ensure the model is available before proceeding
+        try:
+            # Small test to verify model availability
+            _ = model.generate_content("test")
+        except Exception as model_error:
+            # If main model fails, fall back to gemini-2.0-flash
+            print(f"Error with main model: {str(model_error)}, falling back to gemini-2.0-flash")
+            model = genai.GenerativeModel(
+                model_name="gemini-2.0-flash",
+                generation_config={
+                    "temperature": 0.1,
+                    "top_p": 0.95,
+                    "max_output_tokens": 1024,
+                }
+            )
+        
+        # Process the translation request
+        translation_response = model.generate_content(translation_prompt)
+        translated_text = translation_response.text.strip()
+        
+        # Use Gemini for language detection with a more explicit prompt
+        detection_prompt = f"""
+What language is this text written in? Answer with only the language name.
+
+Text: "{text}"
+"""
+        detection_model = genai.GenerativeModel(
+            model_name="gemini-2.0-flash",
+            generation_config={
+                "temperature": 0.0,
+                "top_p": 1.0,
+                "max_output_tokens": 50,
+            }
+        )
+        
+        detection_response = detection_model.generate_content(detection_prompt)
+        detected_language = detection_response.text.strip()
+        
+        # Track token usage for the translation API call
+        translation_tokens = len(text.split()) * 2 + len(translated_text.split()) * 2  # Approximation
+        track_token_usage_for_api_call(user_id, 'translation', None, estimated_tokens=translation_tokens)
+        
+        # Format and return the result
+        return jsonify({
+            'translated_text': translated_text,
+            'detected_language': detected_language,
+            'target_language': target_lang_human,
+            'source_language': source_language if source_language != 'auto' else None,
+            'success': True
+        })
+    except Exception as e:
+        print(f"Translation error: {str(e)}")
+        print(traceback.format_exc())
+        
+        # Try a fallback approach using a simplified prompt
+        try:
+            fallback_prompt = f"Translate this text to {target_language}: '{text}'"
+            fallback_model = genai.GenerativeModel("gemini-2.0-flash")
+            fallback_response = fallback_model.generate_content(fallback_prompt)
+            translated_text = fallback_response.text.strip()
+              # If we succeeded with the fallback, return that translation
+            if translated_text and len(translated_text) > 0:
+                # Track token usage for the fallback translation
+                fallback_tokens = len(text.split()) * 2 + len(translated_text.split()) * 2  # Approximation
+                track_token_usage_for_api_call(user_id, 'translation', None, estimated_tokens=fallback_tokens)
+                
+                return jsonify({
+                    'translated_text': translated_text,
+                    'detected_language': 'Unknown',
+                    'target_language': target_language,
+                    'source_language': source_language if source_language != 'auto' else None,
+                    'success': True,
+                    'fallback_used': True
+                })
+        except Exception as fallback_error:
+            print(f"Fallback translation also failed: {str(fallback_error)}")
+        
+        # Return an error message to the user
+        return jsonify({
+            'response': "<p>Sorry, I couldn't translate your text. Please check your input and try again.</p>",
+            'error': 'translation_failed',
+            'details': str(e)
+        }), 500
+
+# Data Transformation Route
+@app.route('/transform', methods=['GET', 'POST'])
+@login_required
+def transform_data():
+    """
+    Route to transform CSV or Excel files using natural language instructions.
+    """
+    if request.method == 'POST':
+        try:
+            # Check if user has exceeded their token limit
+            user_id = session.get('user_id')
+            can_use, remaining_tokens = check_user_token_limit(user_id)
+            
+            if not can_use:
+                flash("You've reached your daily token limit. Please try again tomorrow or upgrade to premium for a higher limit.", 'warning')
+                return redirect(url_for('transform_data'))
+
+            # Validate file upload
+            if 'file' not in request.files:
+                flash('No file part in the request', 'danger')
+                return redirect(url_for('transform_data'))
+                
+            file = request.files['file']
+            if file.filename == '':
+                flash('No file selected', 'danger')
+                return redirect(url_for('transform_data'))
+            
+            # Check file extension
+            file_ext = os.path.splitext(file.filename)[1].lower()
+            if file_ext not in ['.csv', '.xlsx', '.xls']:
+                flash('Only CSV and Excel files are supported for transformation', 'danger')
+                return redirect(url_for('transform_data'))
+            
+            # Get transformation instructions
+            instructions = request.form.get('instructions', '').strip()
+            if not instructions:
+                flash('Please provide transformation instructions', 'warning')
+                return redirect(url_for('transform_data'))
+            
+            # Save uploaded file
+            filename = secure_filename(file.filename)
+            file_path = os.path.join(app.config['UPLOAD_FOLDER'], filename)
+            file.save(file_path)
+            print(f"File saved to: {file_path}")
+            
+            # Transform the data
+            from data_transformer import transform_dataframe
+            result = transform_dataframe(file_path, instructions, app.config)
+              # Track token usage with proper handling of the token count
+            try:
+                token_usage = result.get('token_usage', 0)
+                
+                # Ensure token_usage is an integer
+                if not isinstance(token_usage, int):
+                    token_usage = int(token_usage) if str(token_usage).isdigit() else 0
+                    
+                track_token_usage_for_api_call(
+                    user_id, 
+                    f"Transform data - instructions: {instructions[:100]}...", 
+                    f"Generated transformation code - length: {len(result.get('code', ''))}",
+                    estimated_tokens=token_usage
+                )
+                
+                print(f"Tracked {token_usage} tokens for data transformation")
+            except Exception as token_err:
+                print(f"Error tracking token usage: {token_err}")
+                # Use a fallback token count estimate
+                fallback_tokens = 500  # Conservative estimate
+                track_token_usage_for_api_call(
+                    user_id, 
+                    f"Transform data - instructions: {instructions[:100]}...", 
+                    f"Generated transformation code - length: {len(result.get('code', ''))}",
+                    estimated_tokens=fallback_tokens
+                )
+            
+            if result.get('success'):
+                # Success - redirect to download page with result info
+                flash('Data transformation completed successfully!', 'success')
+                
+                # Create a URL for the transformed file
+                download_url = url_for('download_file', filename=result['transformed_filename'], _external=True)
+                
+                # Render the result template with transformation details
+                return render_template('transform_result.html', 
+                    result=result,
+                    download_url=download_url,
+                    original_filename=result['original_filename'],
+                    transformed_filename=result['transformed_filename'],
+                    rows_before=result['rows_before'],
+                    rows_after=result['rows_after'],
+                    columns_before=result['columns_before'],
+                    columns_after=result['columns_after'],
+                    code=result['code']
+                )
+            else:
+                # Error - show error message
+                flash(f"Error transforming data: {result.get('error')}", 'danger')
+                # If there was code generated, show it even though execution failed
+                if result.get('code'):
+                    return render_template('transform_data.html', error=result.get('error'), code=result.get('code'))
+                return redirect(url_for('transform_data'))
+                
+        except Exception as e:
+            print(f"Error in transform_data route: {e}")
+            traceback.print_exc()
+            flash(f"An unexpected error occurred: {str(e)}", 'danger')
+            return redirect(url_for('transform_data'))
+      # GET request - show the upload form
+    return render_template('transform_data.html')
+
+if __name__ == '__main__':
+
+    # Use PORT environment variable if available (for Render deployment)
+    port = int(os.environ.get('PORT', 5000))
+    app.run(host='0.0.0.0', port=port, debug=False)

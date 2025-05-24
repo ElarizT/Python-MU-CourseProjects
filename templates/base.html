@@ -1,0 +1,1820 @@
+<!DOCTYPE html>
+<html lang="{{ g.current_language }}">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>{% block title %}LightYearAI{% endblock %}</title>
+    <!-- Favicon -->
+    <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
+    <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon/favicon-16x16.png">
+    <link rel="shortcut icon" href="/static/favicon/favicon.ico">    <!-- Stylesheets -->
+    <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
+    <link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/6.0.0/css/all.min.css">    <link rel="stylesheet" href="/static/css/custom.css">
+    <link rel="stylesheet" href="/static/css/unified_chat.css">    <link rel="stylesheet" href="/static/css/animations.css">
+    <link rel="stylesheet" href="/static/css/file-context.css">    <link rel="stylesheet" href="/static/css/settings-modal.css"><style>
+        /* Main content styling for non-chat pages */
+        .main-content {
+            padding: 20px;
+            height: calc(100vh - 65px);  /* Adjust based on header height */
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            color: #333;
+        }
+        
+        /* Token usage toast notification */
+        #tokenNotification {
+            position: fixed;
+            bottom: 20px;
+            right: 20px;
+            z-index: 1050;
+            max-width: 350px;
+        }
+        .token-progress {
+            height: 8px;
+        }
+          /* Token Counter Display */
+        .token-counter {
+            position: relative;
+            margin-right: 8px; /* Reduced spacing between token counter and profile icon */
+            margin-left: auto; /* Push to right side of header */
+            display: flex;
+            align-items: center;
+            cursor: pointer;
+        }
+          .token-display {
+            background-color: rgba(255, 255, 255, 0.1);
+            border-radius: 20px;
+            padding: 5px 12px;
+            display: flex;
+            align-items: center;
+            color: #ffffff;
+            font-size: 0.9rem;
+            font-weight: 500;
+            transition: all 0.2s ease;
+        }
+        
+        .token-display:hover {
+            background-color: rgba(255, 255, 255, 0.2);
+        }
+          .token-icon {
+            color: #FFD700;
+            margin-right: 5px;
+            font-size: 0.8rem;
+        }
+        
+        .token-tooltip {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            padding: 15px;
+            width: 250px;
+            z-index: 1000;
+            display: none;
+            color: #333;
+            margin-top: 10px;
+        }
+        
+        .tooltip-header {
+            font-weight: bold;
+            margin-bottom: 5px;
+            font-size: 1rem;
+        }
+        
+        .tooltip-progress {
+            margin: 8px 0;
+        }
+        
+        .tooltip-details {
+            margin-top: 10px;
+        }
+        
+        .tooltip-row {
+            display: flex;
+            justify-content: space-between;
+            margin-bottom: 5px;
+            font-size: 0.9rem;
+        }
+        
+        /* Profile tooltip styling */
+        .profile-tooltip {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            width: 220px;
+            z-index: 1000;
+            display: none;
+            color: #333;
+            margin-top: 8px;
+            font-size: 0.9rem;
+        }
+        
+        /* Full screen chat interface */
+        body, html {
+            height: 100%;
+            margin: 0;
+            padding: 0;
+            overflow: hidden;
+            background: linear-gradient(135deg, #181c2f 0%, #232946 100%);
+        }
+        
+        .chat-container {
+            display: flex;
+            height: 100vh;
+            width: 100vw;
+            position: relative;
+        }
+        
+        /* Sidebar styling - completely revised */
+        .chat-sidebar {
+            width: 320px;
+            background: rgba(27, 32, 59, 0.95);
+            border-right: 1px solid rgba(255, 255, 255, 0.1);
+            overflow-y: auto;
+            overflow-x: hidden;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            position: fixed;
+            top: 0;
+            left: -320px; /* Start off-screen */
+            z-index: 1000;
+            box-shadow: 0 0 20px rgba(0, 0, 0, 0.2);
+            transition: left 0.3s ease; /* Animate left property */
+        }
+        
+        .chat-sidebar.open {
+            left: 0; /* Slide in */
+        }
+        
+        /* Toggle button styling */
+        .sidebar-toggle {
+            position: fixed;
+            left: 15px;
+            top: 25px; /* Moved down from 15px to 25px to prevent it from being cut off */
+            background: rgba(36, 40, 80, 0.8);
+            border: 1px solid rgba(255, 255, 255, 0.15);
+            border-radius: 50%;
+            color: white;
+            font-size: 1.25rem;
+            cursor: pointer;
+            width: 40px;
+            height: 40px;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            z-index: 1001;
+            transition: background 0.3s ease;
+        }
+        
+        .sidebar-toggle:hover {
+            background: rgba(99, 102, 241, 0.7);
+        }
+        
+        /* Main content area */
+        .chat-main {
+            flex: 1;
+            display: flex;
+            flex-direction: column;
+            height: 100%;
+            margin-left: 0; /* Default state */
+            width: 100%;
+            transition: margin-left 0.3s ease;
+        }
+        
+        .chat-main.shifted {
+            margin-left: 320px; /* When sidebar is open */
+        }
+          /* Header styling */
+        .chat-header {
+            display: flex;
+            align-items: center;
+            padding: 1rem;
+            background: rgba(36, 40, 80, 0.7);
+            backdrop-filter: blur(10px);
+            border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+            justify-content: space-between; /* Helps with spacing elements */
+        }
+        
+        .header-logo {
+            display: flex;
+            align-items: center;
+            margin-left: 50px; /* Space for toggle button */
+        }
+        
+        .chat-content {
+            flex: 1;
+            overflow-y: auto;
+            padding: 1rem;
+            background: rgba(36, 40, 80, 0.3);
+        }
+        
+        .chat-footer {
+            padding: 1rem;
+            background: rgba(36, 40, 80, 0.7);
+            backdrop-filter: blur(10px);
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            display: flex;
+            align-items: center;
+        }
+        
+        .message-input-wrapper {
+            position: relative;
+            flex: 1;
+        }
+        
+        .message-input {
+            width: 100%;
+            padding: 0.75rem 1rem;
+            border-radius: 8px;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            background: rgba(255, 255, 255, 0.1);
+            color: white;
+            resize: none;
+        }
+        
+        .message-input::placeholder {
+            color: rgba(255, 255, 255, 0.6);
+        }
+        
+        .message-input:focus {
+            outline: none;
+            border-color: rgba(99, 102, 241, 0.5);
+        }
+          .user-profile {
+            margin-left: 0; /* Changed from auto to position right after token counter */
+            cursor: pointer;
+            position: relative;
+        }
+        
+        .profile-dropdown {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: rgba(36, 40, 80, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            width: 200px;
+            display: none;
+            z-index: 1000;
+            overflow: hidden;
+        }
+        
+        .profile-dropdown.show {
+            display: block;
+        }
+        
+        .dropdown-item {
+            padding: 0.75rem 1rem;
+            color: white;
+            text-decoration: none;
+            display: block;
+            transition: background 0.2s;
+        }
+        
+        .dropdown-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .dropdown-divider {
+            border-top: 1px solid rgba(255, 255, 255, 0.1);
+            margin: 0.5rem 0;
+        }
+        
+        /* Complete redesign of message styles to eliminate outer layers */
+        .message {
+            margin-bottom: 1rem;
+            display: flex;
+            background: none !important; /* Force remove any background */
+            box-shadow: none !important; /* Force remove any box shadow */
+            border: none !important; /* Force remove any border */
+            padding: 0 !important; /* Reset padding */
+            position: relative !important; /* Ensure proper stacking context */
+            z-index: 1 !important; /* Ensure visibility */
+        }
+        
+        .user-message {
+            justify-content: flex-end; /* Align user messages to the right */
+        }
+        
+        .bot-message {
+            justify-content: flex-start; /* Align bot messages to the left */
+        }
+        
+        /* Direct style for message bubble with !important to override external CSS */
+        .message-bubble {
+            padding: 0.75rem 1rem !important;
+            border-radius: 18px !important;
+            display: inline-block !important;
+            max-width: 70% !important;
+            min-width: auto !important;
+            width: auto !important;
+            word-wrap: break-word !important;
+            box-shadow: none !important;
+            border: none !important;
+            margin: 0 !important;
+            background-clip: padding-box !important;
+            position: relative !important;
+            z-index: 1 !important;
+            overflow: visible !important; /* Ensure content isn't cut off */
+        }
+        
+        /* Clean styling for paragraphs inside bubbles */
+        .message-bubble p {
+            margin: 0 !important;
+            padding: 0 !important;
+            text-align: left !important;
+            white-space: pre-wrap !important; /* Preserves line breaks and spaces */
+            color: inherit !important; /* Ensures text color matches parent */
+        }
+        
+        /* User message specific styling */
+        .user-message .message-bubble {
+            background: rgba(99, 102, 241, 0.8) !important;
+            color: white !important;
+            margin-left: auto !important; /* Push the bubble to the right */
+            border-top-right-radius: 4px !important; /* Sharp corner on top right */
+        }
+        
+        /* Bot message specific styling - improved for better readability with dark background */
+        .bot-message .message-bubble {
+            background: rgba(36, 40, 80, 0.8) !important; /* Dark background matching theme */
+            color: white !important; /* White text for contrast */
+            margin-right: auto !important; /* Push the bubble to the left */
+            border-top-left-radius: 4px !important; /* Sharp corner on top left */
+            display: inline-block !important; /* Allow bubble to fit content size */
+            box-shadow: none !important; /* Remove any shadow */
+            width: auto !important; /* Let width adjust to content */
+        }
+        
+        /* Remove any pseudo elements that might be causing layering issues */
+        .message::before, .message::after,
+        .message-bubble::before, .message-bubble::after,
+        .message *::before, .message *::after {
+            display: none !important;
+            content: none !important;
+            background: none !important;
+            box-shadow: none !important;
+            border: none !important;
+        }
+        
+        /* Fix any nested elements or overlays - force them to behave */
+        .message *, .message-bubble * {
+            position: relative !important;
+            z-index: 1 !important;
+            background: transparent !important;
+            color: inherit !important;
+        }
+        
+        /* Special styling for code blocks and preformatted text inside bot messages */
+        .bot-message .message-bubble code, 
+        .bot-message .message-bubble pre {
+            background-color: rgba(24, 26, 44, 0.5) !important; /* Slightly darker than bubble for code */
+            color: white !important;
+            border-radius: 4px !important;
+            padding: 0.2em 0.4em !important;
+            font-family: monospace !important;
+            border: 1px solid rgba(255, 255, 255, 0.1) !important;
+        }
+        
+        .bot-message .message-bubble pre {
+            padding: 0.5rem !important;
+            width: 100% !important;
+            overflow-x: auto !important;
+        }
+        
+        /* Override any external styles that might interfere */
+        .message > *:not(.message-bubble) {
+            display: none !important;
+        }
+        
+        /* Typing indicator */
+        .typing {
+            display: flex;
+            align-items: center;
+            gap: 4px;
+        }
+        
+        .typing span {
+            width: 8px;
+            height: 8px;
+            background: rgba(255, 255, 255, 0.6);
+            border-radius: 50%;
+            animation: typing-bounce 1s infinite ease-in-out;
+        }
+        
+        .typing span:nth-child(1) {
+            animation-delay: 0s;
+        }
+        
+        .typing span:nth-child(2) {
+            animation-delay: 0.2s;
+        }
+        
+        .typing span:nth-child(3) {
+            animation-delay: 0.4s;
+        }
+        
+        @keyframes typing-bounce {
+            0%, 60%, 100% {
+                transform: translateY(0);
+            }
+            30% {
+                transform: translateY(-4px);
+            }
+        }
+        
+        /* Sidebar content */
+        .sidebar-header {
+            padding: 1.5rem 1rem;
+            display: flex;
+            align-items: center;
+        }
+        
+        .history-title {
+            color: white;
+            margin: 1rem;
+            font-weight: 500;
+            display: flex;
+            align-items: center;
+            gap: 0.5rem;
+        }
+        
+        .history-container {
+            flex: 1;
+            overflow-y: auto;
+        }
+        
+        .new-chat-btn {
+            display: block;
+            width: calc(100% - 2rem);
+            margin: 1rem;
+            padding: 0.75rem;
+            background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%);
+            color: white;
+            border: none;
+            border-radius: 8px;
+            font-weight: 500;
+            cursor: pointer;
+            transition: all 0.2s;
+        }
+        
+        .new-chat-btn:hover {
+            transform: translateY(-2px);
+            box-shadow: 0 4px 12px rgba(0, 0, 0, 0.15);
+        }
+        
+        /* Command suggestions */
+        #commandSuggestions {
+            position: absolute;
+            bottom: 100%;
+            left: 0;
+            right: 0;
+            background: rgba(36, 40, 80, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 8px;
+            margin-bottom: 0.5rem;
+            max-height: 200px;
+            overflow-y: auto;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .command-item {
+            padding: 0.5rem 1rem;
+            cursor: pointer;
+            color: white;
+            transition: background 0.2s;
+        }
+        
+        .command-item:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        /* Language dropdown */
+        .language-dropdown {
+            margin-left: 1rem;
+            position: relative;
+        }
+        
+        .language-btn {
+            background: none;
+            border: 1px solid rgba(255, 255, 255, 0.2);
+            color: white;
+            padding: 0.5rem 0.75rem;
+            border-radius: 4px;
+            cursor: pointer;
+            font-size: 0.9rem;
+        }
+        
+        .language-options {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background: rgba(36, 40, 80, 0.95);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            border-radius: 4px;
+            width: 150px;
+            z-index: 1000;
+            display: none;
+        }
+        
+        .language-options.show {
+            display: block;
+        }
+        
+        .language-option {
+            padding: 0.5rem 1rem;
+            color: white;
+            cursor: pointer;
+            transition: background 0.2s;
+        }
+        
+        .language-option:hover {
+            background: rgba(255, 255, 255, 0.1);
+        }
+        
+        .action-buttons {
+            display: flex;
+            gap: 0.5rem;
+            margin-left: 1rem;
+        }
+        
+        .action-button {
+            background: none;
+            border: none;
+            color: white;
+            font-size: 1.5rem;
+            cursor: pointer;
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            transition: transform 0.2s;
+        }
+        
+        .action-button:hover {
+            transform: translateY(-2px);
+        }
+        
+        .focus-highlight:focus {
+            box-shadow: 0 0 0 0.2rem rgba(99, 102, 241, 0.25);
+        }
+          .hover-float:hover {
+            transform: translateY(-2px);
+        }
+        
+        /* Main content styling for non-chat pages */
+        .main-content {
+            padding: 20px;
+            height: calc(100vh - 65px);  /* Adjust based on header height */
+            overflow-y: auto;
+            background-color: #f8f9fa;
+            color: #333;
+        }
+        
+        {% block additional_styles %}{% endblock %}
+        
+        /* Profile tooltip styling */
+        .profile-tooltip {
+            position: absolute;
+            top: 100%;
+            right: 0;
+            background-color: #ffffff;
+            border-radius: 8px;
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            padding: 10px;
+            width: 220px;
+            z-index: 1000;
+            display: none;
+            color: #333;
+            margin-top: 8px;
+            font-size: 0.9rem;
+        }
+    </style>
+</head>
+<body>
+    {% if session.get('user_id') %}
+    <div class="chat-container">        <!-- Sidebar -->
+        <div id="chatSidebar" class="chat-sidebar">
+            <div class="sidebar-header">
+                <img src="/static/images/logo.png" alt="LightYearAI Logo" height="40">
+                <span class="text-white ms-2 fw-bold">LightYearAI</span>
+                <button class="btn btn-sm btn-outline-light sync-button" id="syncButton" title="Sync chat history across devices">
+                    <i class="fas fa-sync-alt"></i>
+                </button>
+            </div>
+            <button id="newChatBtn" class="new-chat-btn">
+                <i class="fas fa-plus me-2"></i> New Chat
+            </button>
+            <div class="history-header">
+                <div class="history-title">
+                    <i class="fas fa-history"></i> Chat History
+                </div>                <div class="history-search-container">
+                    <input type="text" id="chatHistorySearch" class="history-search" placeholder="Search chats..." />
+                    <i class="fas fa-search search-icon"></i>
+                    <button id="clearSearchBtn" class="clear-input-btn" title="Clear search" style="display: none;">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+            </div>
+            <div id="chatHistory" class="history-container">
+                <!-- Chat history items will be populated here -->
+            </div>
+        </div>
+        
+        <!-- Main Chat Area -->
+        <div id="chatMain" class="chat-main">
+            <!-- Chat Header -->
+            <div class="chat-header">
+                <button id="sidebarToggle" class="sidebar-toggle">
+                    <i class="fas fa-bars"></i>
+                </button>
+                <div class="header-logo">
+                    <img src="/static/images/logo.png" alt="LightYearAI Logo" height="40">
+                    <span class="text-white ms-2 fw-bold">LightYearAI</span>
+                </div>                <div class="language-dropdown">
+                    <button id="languageBtn" class="language-btn">
+                        <i class="fas fa-globe me-1"></i> {{ g.current_language_name }}
+                    </button>
+                    <div id="languageOptions" class="language-options">
+                        <div class="language-option {% if g.current_language == 'en' %}active{% endif %}" data-lang="en">English</div>
+                        <div class="language-option {% if g.current_language == 'pl' %}active{% endif %}" data-lang="pl">Polski</div>
+                        <div class="language-option {% if g.current_language == 'az' %}active{% endif %}" data-lang="az">Azərbaycan</div>
+                    </div>
+                </div>                <!-- Token Counter Display -->
+                <div class="token-counter" id="tokenCounter">
+                    <div class="token-display">
+                        <i class="fas fa-bolt token-icon"></i>
+                        <span id="tokenCountValue">25000</span>
+                    </div>
+                    <div class="token-tooltip" id="tokenTooltip">
+                        <div class="tooltip-header">
+                            <span id="tokenPlanName">-</span> Plan
+                        </div>
+                        <div class="token-progress tooltip-progress mt-2">
+                            <div class="progress-bar" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                        </div>
+                        <div class="tooltip-details">
+                            <div class="tooltip-row">
+                                <span>Used:</span>
+                                <span id="tokenUsedCount">-</span>
+                            </div>
+                            <div class="tooltip-row">
+                                <span>Daily Limit:</span>
+                                <span id="tokenDailyLimit">-</span>
+                            </div>
+                            <div class="tooltip-row">
+                                <span>Remaining:</span>
+                                <span id="tokenRemainingCount">-</span>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+                <div class="user-profile" id="userProfile">
+                    {% if g.user_picture %}
+                    <img src="{{ g.user_picture }}" alt="Profile" class="rounded-circle" style="width:40px;height:40px;object-fit:cover;">
+                    {% else %}
+                    <div class="rounded-circle bg-primary d-flex align-items-center justify-content-center" style="width:40px;height:40px;">
+                        <i class="fas fa-user"></i>
+                    </div>
+                    {% endif %}
+                    <!-- Profile tooltip -->
+                    <div class="profile-tooltip" id="profileTooltip">
+                        <div><strong>Plan:</strong> <span id="profilePlanName">-</span></div>
+                        <div><strong>Used:</strong> <span id="profileTokenUsed">-</span></div>
+                        <div><strong>Daily Limit:</strong> <span id="profileDailyLimit">-</span></div>
+                        <div><strong>Remaining:</strong> <span id="profileRemaining">-</span></div>
+                    </div>
+                    <div id="profileDropdown" class="profile-dropdown">
+                        <div class="dropdown-item">
+                            <i class="fas fa-user me-2"></i> {{ g.user_name }}
+                        </div>
+                        <div class="dropdown-divider"></div>                        <a href="#" class="dropdown-item" data-settings-open="true">
+                            <i class="fas fa-cog me-2"></i> Settings                        </a>
+                        {% if g.user_id %}
+                        <a href="/account" class="dropdown-item">
+                            <i class="fas fa-crown me-2"></i> Subscription Plan
+                        </a>
+                        <div class="dropdown-divider"></div>
+                        <a href="/logout" class="dropdown-item">
+                            <i class="fas fa-sign-out-alt me-2"></i> Logout
+                        </a>
+                        {% endif %}
+                    </div>
+                </div>            </div>
+            
+            {% if active_page == 'account' or active_page == 'feedback' %}
+            <!-- Content Block for other pages -->
+            <div class="main-content">
+                {% block content %}{% endblock %}
+            </div>
+            {% else %}
+            <!-- Chat Content -->
+            <div id="chatMessages" class="chat-content">
+                <!-- Welcome message -->
+                <div class="bot-message message">
+                    <div class="message-bubble">
+                        <p>Welcome to LightYearAI! I'm your AI assistant. How can I help you today?</p>
+                    </div>
+                </div>
+            </div>
+            
+            <!-- Chat Input -->
+            <div class="chat-footer">
+                <div class="message-input-wrapper">
+                    <div id="commandSuggestions" class="command-reveal"></div>
+                    <textarea id="chatInput" class="message-input focus-highlight" placeholder="Type a message or use / for commands" rows="1"></textarea>
+                </div>
+                <div class="action-buttons">
+                    <button id="micButton" class="action-button hover-float" title="Voice input">
+                        <i class="fas fa-microphone"></i>
+                    </button>
+                    <button id="uploadButton" class="action-button hover-float" title="Upload file">
+                        <i class="fas fa-upload"></i>
+                    </button>
+                    <button id="sendButton" class="action-button hover-float" title="Send message">
+                        <i class="fas fa-paper-plane"></i>
+                    </button>                </div>
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% else %}
+    <!-- Login Prompt for Unauthenticated Users -->
+    <div class="login-required-container">
+        <div class="login-card">
+            <div class="login-logo">
+                <img src="/static/images/logo.png" alt="LightYearAI Logo" height="80">
+                <h1 class="mt-3">LightYearAI</h1>
+            </div>
+            <div class="login-message">
+                <p>You need to log in to access the chat functionality.</p>
+                <p>Please log in to continue or create a new account.</p>
+            </div>
+            <div class="login-actions">
+                <a href="/login" class="login-button">
+                    <i class="fas fa-sign-in-alt me-2"></i> Log In
+                </a>
+                <a href="/signup" class="signup-button">
+                    <i class="fas fa-user-plus me-2"></i> Sign Up
+                </a>
+            </div>
+        </div>
+    </div>
+
+    <style>
+        .login-required-container {
+            display: flex;
+            justify-content: center;
+            align-items: center;
+            height: 100vh;
+            background: linear-gradient(135deg, #181c2f 0%, #232946 100%);
+        }
+        
+        .login-card {
+            background: rgba(36, 40, 80, 0.8);
+            border-radius: 15px;
+            padding: 40px;
+            text-align: center;
+            max-width: 500px;
+            width: 90%;
+            box-shadow: 0 10px 30px rgba(0, 0, 0, 0.3);
+            border: 1px solid rgba(255, 255, 255, 0.1);
+            backdrop-filter: blur(10px);
+        }
+        
+        .login-logo {
+            margin-bottom: 30px;
+            color: white;
+        }
+        
+        .login-message {
+            color: white;
+            margin-bottom: 30px;
+            font-size: 1.1rem;
+        }
+        
+        .login-actions {
+            display: flex;
+            justify-content: center;
+            gap: 20px;
+        }
+        
+        .login-button, .signup-button {
+            padding: 12px 30px;
+            border-radius: 8px;
+            font-weight: 500;
+            text-decoration: none;
+            transition: transform 0.2s, box-shadow 0.2s;
+            display: inline-flex;
+            align-items: center;
+        }
+        
+        .login-button {
+            background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%);
+            color: white;
+        }
+        
+        .signup-button {
+            background: rgba(255, 255, 255, 0.15);
+            color: white;
+            border: 1px solid rgba(255, 255, 255, 0.3);
+        }
+        
+        .login-button:hover, .signup-button:hover {
+            transform: translateY(-3px);
+            box-shadow: 0 5px 15px rgba(0, 0, 0, 0.2);
+            color: white;
+        }
+    </style>
+    {% endif %}
+
+    <!-- Token Usage Notification Toast -->
+    <div class="toast-container" id="tokenNotification">
+        <div class="toast" role="alert" aria-live="assertive" aria-atomic="true" data-bs-autohide="false">
+            <div class="toast-header">
+                <i class="fas fa-exclamation-triangle text-warning me-2"></i>
+                <strong class="me-auto">Token Usage Alert</strong>
+                <button type="button" class="btn-close" data-bs-dismiss="toast" aria-label="Close"></button>
+            </div>
+            <div class="toast-body">
+                <p id="tokenMessage"></p>
+                <div class="progress token-progress mb-2">
+                    <div class="progress-bar" role="progressbar" style="width: 0%" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100"></div>
+                </div>
+                <p class="mb-0"><small class="text-muted" id="tokenDetails"></small></p>
+                <div class="mt-2 pt-2 border-top" id="upgradeButtonContainer" style="display: none;">
+                    <a href="/account" class="btn btn-primary btn-sm">Upgrade to Premium</a>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <script>
+    // BRAND NEW SIDEBAR FUNCTIONALITY - standalone implementation
+    document.addEventListener("DOMContentLoaded", function() {
+        // Add this script at the end BEFORE other scripts to ensure it loads first
+        // This is a completely self-contained sidebar toggle implementation
+        (function() {
+            // Get core elements
+            const toggleButton = document.getElementById('sidebarToggle');
+            const sidebar = document.getElementById('chatSidebar');
+            const mainContent = document.getElementById('chatMain');
+            
+            // Simple feature detection
+            if (!toggleButton || !sidebar || !mainContent) return;
+            
+            // Function to update tooltip based on sidebar state
+            function updateTooltip(isOpen) {
+                toggleButton.setAttribute('title', isOpen ? 'Close sidebar' : 'Open sidebar');
+                toggleButton.setAttribute('aria-label', isOpen ? 'Close sidebar' : 'Open sidebar');
+            }
+            
+            // Setup direct click handler (no complex logic)
+            toggleButton.onclick = function(e) {
+                e.preventDefault();
+                
+                // Track sidebar state with data attribute for reliability
+                const isSidebarOpen = sidebar.getAttribute('data-open') === 'true';
+                
+                if (isSidebarOpen) {
+                    // Close sidebar
+                    sidebar.style.left = '-320px';
+                    sidebar.setAttribute('data-open', 'false');
+                    mainContent.style.marginLeft = '0';
+                    toggleButton.innerHTML = '<i class="fas fa-bars"></i>'; // Always hamburger icon
+                    updateTooltip(false);
+                } else {
+                    // Open sidebar
+                    sidebar.style.left = '0';
+                    sidebar.setAttribute('data-open', 'true');
+                    mainContent.style.marginLeft = '320px';
+                    toggleButton.innerHTML = '<i class="fas fa-bars"></i>'; // Always hamburger icon
+                    updateTooltip(true);
+                }
+            };
+            
+            // Set initial state (sidebar closed by default)
+            sidebar.style.left = '-320px';
+            sidebar.setAttribute('data-open', 'false');
+            mainContent.style.marginLeft = '0';
+            toggleButton.innerHTML = '<i class="fas fa-bars"></i>'; // Fixed closing quote
+            updateTooltip(false);
+            
+            // Ensure proper styling is applied consistently
+            sidebar.style.position = 'fixed';
+            sidebar.style.top = '0';
+            sidebar.style.width = '320px';
+            sidebar.style.height = '100%';
+            sidebar.style.zIndex = '1000';
+            sidebar.style.background = 'rgba(27, 32, 59, 0.95)';
+            sidebar.style.borderRight = '1px solid rgba(255, 255, 255, 0.1)';
+            sidebar.style.boxShadow = '0 0 20px rgba(0, 0, 0, 0.2)';
+            sidebar.style.overflow = 'auto';
+            sidebar.style.transition = 'left 0.3s ease';
+            sidebar.style.display = 'flex';
+            sidebar.style.flexDirection = 'column';
+            
+            toggleButton.style.cursor = 'pointer';
+            
+            console.log("Sidebar toggle functionality initialized successfully");
+        })();
+    });
+</script>
+    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+    <script src="/static/js/agent.js"></script>
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            // Direct sidebar toggle implementation
+            const toggleButton = document.getElementById('sidebarToggle');
+            const sidebar = document.getElementById('chatSidebar');
+            const chatMain = document.getElementById('chatMain');
+            
+            function toggleSidebar() {
+                if (!sidebar || !toggleButton) return;
+                
+                // Check if sidebar is currently open
+                const isOpen = sidebar.classList.contains('open');
+                
+                if (isOpen) {
+                    // Close sidebar
+                    sidebar.classList.remove('open');
+                    chatMain.classList.remove('shifted');
+                    toggleButton.querySelector('i').className = 'fas fa-bars';
+                } else {
+                    // Open sidebar
+                    sidebar.classList.add('open');
+                    chatMain.classList.add('shifted');
+                    toggleButton.querySelector('i').className = 'fas fa-times';
+                }
+                
+                // Store preference
+                localStorage.setItem('sidebarOpen', !isOpen);
+            }
+            
+            if (toggleButton) {
+                toggleButton.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    e.stopPropagation();
+                    toggleSidebar();
+                });
+            }
+            
+            // Initialize sidebar state from localStorage
+            const savedState = localStorage.getItem('sidebarOpen');
+            if (sidebar) {
+                if (savedState === 'true') {
+                    sidebar.classList.add('open');
+                    chatMain.classList.add('shifted');
+                    if (toggleButton) toggleButton.querySelector('i').className = 'fas fa-times';
+                } else {
+                    sidebar.classList.remove('open');
+                    chatMain.classList.remove('shifted');
+                    if (toggleButton) toggleButton.querySelector('i').className = 'fas fa-bars';
+                }
+            }
+            
+            // User profile dropdown and tooltip
+            const userProfile = document.getElementById('userProfile');
+            const profileDropdown = document.getElementById('profileDropdown');
+            const profileTooltip = document.getElementById('profileTooltip');
+            
+            if (userProfile) {
+                // Toggle dropdown on click
+                userProfile.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    profileDropdown.classList.toggle('show');
+                });
+                // Show tooltip on hover
+                userProfile.addEventListener('mouseenter', function() {
+                    profileTooltip.style.display = 'block';
+                });
+                userProfile.addEventListener('mouseleave', function(e) {
+                    // Hide only if moving outside tooltip as well
+                    if (!profileTooltip.contains(e.relatedTarget)) {
+                        profileTooltip.style.display = 'none';
+                    }
+                });
+                // Close dropdown when clicking elsewhere
+                document.addEventListener('click', function(e) {
+                    if (profileDropdown.classList.contains('show') && !profileDropdown.contains(e.target)) {
+                        profileDropdown.classList.remove('show');
+                    }
+                });
+            }
+              // Handle clicks inside profile dropdown to allow links to work
+            if (profileDropdown) {
+                profileDropdown.addEventListener('click', function(e) {
+                    // Stop propagation to prevent dropdown from closing immediately
+                    e.stopPropagation();
+                    
+                    // If the click was on a link, allow it to navigate
+                    const clickedLink = e.target.closest('a');
+                    if (clickedLink) {
+                        // Don't prevent default link behavior
+                        // The link will navigate naturally
+                    }
+                });
+            }
+            
+            // Language dropdown
+            const languageBtn = document.getElementById('languageBtn');
+            const languageOptions = document.getElementById('languageOptions');
+            const languageItems = document.querySelectorAll('.language-option');
+            
+            if (languageBtn) {
+                languageBtn.addEventListener('click', function(e) {
+                    e.stopPropagation();
+                    languageOptions.classList.toggle('show');
+                });
+                
+                // Close dropdown when clicking elsewhere
+                document.addEventListener('click', function(e) {
+                    if (languageOptions.classList.contains('show') && !languageOptions.contains(e.target)) {
+                        languageOptions.classList.remove('show');
+                    }
+                });
+                
+                // Handle language selection
+                languageItems.forEach(item => {
+                    item.addEventListener('click', function() {
+                        const lang = this.getAttribute('data-lang');
+                        window.location.href = '/set_language/' + lang + '?next=' + encodeURIComponent(window.location.pathname);
+                    });
+                });
+            }
+            
+            // Auto-resize textarea
+            const chatInput = document.getElementById('chatInput');
+            
+            if (chatInput) {
+                chatInput.addEventListener('input', function() {
+                    this.style.height = 'auto';
+                    this.style.height = (this.scrollHeight) + 'px';
+                });
+                
+                // Handle Enter key to send message
+                chatInput.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' && !e.shiftKey) {
+                        e.preventDefault();
+                        const text = this.value.trim();
+                        if (text) {
+                            sendMessage(text);
+                            this.value = '';
+                            this.style.height = 'auto';
+                        }
+                    }
+                });
+            }
+            
+            // File upload button handler
+            const uploadButton = document.getElementById('uploadButton');
+            const hiddenFileInput = document.createElement('input');
+            hiddenFileInput.type = 'file';
+            hiddenFileInput.accept = '.txt,.pdf,.docx,.xlsx,.csv';
+            hiddenFileInput.style.display = 'none';
+            document.body.appendChild(hiddenFileInput);
+            
+            if (uploadButton) {
+                uploadButton.addEventListener('click', function(e) {
+                    e.preventDefault();
+                    hiddenFileInput.click();
+                });
+                
+                hiddenFileInput.addEventListener('change', function() {
+                    if (this.files && this.files.length > 0) {
+                        const file = this.files[0];
+                        
+                        // Validate file size (max 10MB)
+                        if (file.size > 10 * 1024 * 1024) {
+                            alert('File size must be less than 10MB');
+                            this.value = '';
+                            return;
+                        }
+                        
+                        // Create FormData and append file
+                        const formData = new FormData();
+                        formData.append('file', file);
+                        
+                        // Show upload in progress message
+                        const chatMessages = document.getElementById('chatMessages');
+                        const userMsg = document.createElement('div');
+                        userMsg.className = 'user-message message';
+                        userMsg.innerHTML = `<div class="message-bubble"><p>Uploading file: ${file.name}</p></div>`;
+                        chatMessages.appendChild(userMsg);
+                        
+                        // Show typing indicator
+                        const typingIndicator = document.createElement('div');
+                        typingIndicator.className = 'bot-message message typing-indicator';
+                        typingIndicator.innerHTML = `
+                            <div class="message-bubble">
+                                <div class="typing">
+                                    <span></span>
+                                    <span></span>
+                                    <span></span>
+                                </div>
+                            </div>
+                        `;
+                        chatMessages.appendChild(typingIndicator);
+                        chatMessages.scrollTop = chatMessages.scrollHeight;
+                        
+                        // Upload file
+                        fetch('/api/upload', {
+                            method: 'POST',
+                            body: formData
+                        })
+                        .then(response => response.json())
+                        .then(data => {
+                            // Remove typing indicator
+                            chatMessages.removeChild(typingIndicator);
+                            
+                            // Add bot response
+                            const botMsg = document.createElement('div');
+                            botMsg.className = 'bot-message message';
+                            
+                            if (data.success) {
+                                // Choose appropriate message based on the current module or mode
+                                const agentObj = window.liyaAgent;
+                                let moduleType = "default";
+                                if (agentObj && agentObj.activeModule) {
+                                    moduleType = agentObj.activeModule;
+                                }
+                                
+                                let successMsg = '';
+                                
+                                switch(moduleType) {
+                                    case 'proofread':
+                                        successMsg = `File uploaded successfully. You can now ask me to proofread ${file.name}.`;
+                                        break;
+                                    case 'study':
+                                        successMsg = `File uploaded successfully. I can help you study the content in ${file.name}.`;
+                                        break;
+                                    case 'entertainment':
+                                        successMsg = `File uploaded successfully. I can discuss the content of ${file.name} with you.`;
+                                        break;
+                                    case 'excel':
+                                        successMsg = `File uploaded successfully. I can help you analyze or transform the data in ${file.name}.`;
+                                        break;
+                                    case 'presentation':
+                                        successMsg = `File uploaded successfully. I can create a presentation based on ${file.name}.`;
+                                        break;
+                                    default:
+                                        successMsg = `File uploaded successfully. Let me know what you'd like to do with ${file.name}.`;
+                                }
+                                
+                                botMsg.innerHTML = `<div class="message-bubble"><p>${successMsg}</p><p><em>Ask me a question about this file to get started.</em></p></div>`;
+                                
+                                // No automatic message will be sent - user must explicitly ask about the file
+                            } else {
+                                botMsg.innerHTML = `<div class="message-bubble"><p>Sorry, there was an error uploading your file: ${data.error || 'Unknown error'}</p></div>`;
+                            }
+                            
+                            chatMessages.appendChild(botMsg);
+                            chatMessages.scrollTop = chatMessages.scrollHeight;
+                            
+                            // Reset file input
+                            hiddenFileInput.value = '';
+                        })
+                    }
+                });
+            }
+            
+            // Function to send a message
+            function sendMessage(text) {
+                // Add user message to UI
+                const chatMessages = document.getElementById('chatMessages');
+                const userMsg = document.createElement('div');
+                userMsg.className = 'user-message message';
+                userMsg.innerHTML = `<div class="message-bubble"><p>${text}</p></div>`;
+                chatMessages.appendChild(userMsg);
+                
+                // Scroll to bottom
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                
+                // Show typing indicator
+                const typingIndicator = document.createElement('div');
+                typingIndicator.className = 'bot-message message typing-indicator';
+                typingIndicator.innerHTML = `
+                    <div class="message-bubble">
+                        <div class="typing">
+                            <span></span>
+                            <span></span>
+                            <span></span>
+                        </div>
+                    </div>
+                `;
+                chatMessages.appendChild(typingIndicator);
+                chatMessages.scrollTop = chatMessages.scrollHeight;
+                
+                // Make API call
+                fetch('/api/chat', {
+                    method: 'POST',
+                    headers: {
+                        'Content-Type': 'application/json'
+                    },
+                    body: JSON.stringify({
+                        message: text
+                    })
+                })
+                .then(response => response.json())
+                .then(data => {
+                    // Remove typing indicator
+                    chatMessages.removeChild(typingIndicator);
+                    
+                    // Add bot response
+                    const botMsg = document.createElement('div');
+                    botMsg.className = 'bot-message message';
+                    botMsg.innerHTML = `<div class="message-bubble"><p>${data.response}</p></div>`;
+                    chatMessages.appendChild(botMsg);
+                    
+                    // Scroll to bottom
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                })
+                .catch(error => {
+                    console.error('Error:', error);
+                    
+                    // Remove typing indicator
+                    chatMessages.removeChild(typingIndicator);
+                    
+                    // Add error message
+                    const errorMsg = document.createElement('div');
+                    errorMsg.className = 'bot-message message';
+                    errorMsg.innerHTML = `<div class="message-bubble"><p>Sorry, I encountered an error. Please try again.</p></div>`;
+                    chatMessages.appendChild(errorMsg);
+                    
+                    // Scroll to bottom
+                    chatMessages.scrollTop = chatMessages.scrollHeight;
+                });
+            }
+            
+            // Handle slash commands
+            if (chatInput) {
+                const commandSuggestions = document.getElementById('commandSuggestions');
+                
+                chatInput.addEventListener('input', function() {
+                    const text = this.value.trim();
+                    
+                    if (text.startsWith('/')) {
+                        const command = text.slice(1).toLowerCase();                        const commands = [
+                            { name: 'excel', emoji: '📊', description: 'Generate an Excel spreadsheet' },
+                            { name: 'study', emoji: '📚', description: 'Get help with studying' },
+                            { name: 'proofread', emoji: '✍️', description: 'Check grammar and spelling' },
+                            { name: 'entertainment', emoji: '🎮', description: 'Chat about movies, music, etc.' },
+                            { name: 'presentation', emoji: '🎯', description: 'Create a presentation' },
+                            { name: 'translate', emoji: '🌐', description: 'Translate text between languages' },
+                            { name: 'summarize', emoji: '📝', description: 'Summarize long text' },
+                            { name: 'clear', emoji: '🧹', description: 'Clear the current chat' },
+                            { name: 'help', emoji: '❓', description: 'Show this help message' }
+                        ];
+                        
+                        // Filter commands
+                        const matches = commands.filter(cmd => cmd.name.startsWith(command));
+                        
+                        if (matches.length > 0) {
+                            // Show command suggestions
+                            commandSuggestions.innerHTML = '';
+                            commandSuggestions.style.display = 'block';
+                            
+                            matches.forEach(cmd => {
+                                const item = document.createElement('div');
+                                item.className = 'command-item';
+                                item.innerHTML = `<strong>/${cmd.name}</strong> ${cmd.emoji} - ${cmd.description}`;
+                                item.addEventListener('click', function() {
+                                    chatInput.value = `/${cmd.name} `;
+                                    chatInput.focus();
+                                    commandSuggestions.style.display = 'none';
+                                });
+                                commandSuggestions.appendChild(item);
+                            });
+                        } else {
+                            commandSuggestions.style.display = 'none';
+                        }
+                    } else {
+                        commandSuggestions.style.display = 'none';
+                    }
+                });
+                  // Close command suggestions when clicking elsewhere
+                document.addEventListener('click', function(e) {
+                    // Handle commandSuggestions dropdown
+                    if (commandSuggestions && !commandSuggestions.contains(e.target) && e.target !== chatInput) {
+                        commandSuggestions.style.display = 'none';
+                    }
+                    
+                    // Handle command link clicks in messages
+                    if (e.target.closest('.command-link')) {
+                        const cmdLink = e.target.closest('.command-link');
+                        const command = cmdLink.getAttribute('data-command');
+                        if (command) {
+                            e.preventDefault();
+                            chatInput.value = `/${command}`;
+                            if (typeof window.agent !== 'undefined' && window.agent) {
+                                window.agent.handleChatSubmit();
+                            }
+                        }
+                    }
+                });
+            }
+        });
+        
+        // Check token usage periodically if the user is logged in
+        {% if session.get('user_id') %}
+        document.addEventListener('DOMContentLoaded', function() {
+            // Create toast instance
+            const tokenToast = new bootstrap.Toast(document.querySelector('#tokenNotification .toast'));
+            let lastNotificationStatus = null;
+            
+            // Function to update token counter and tooltip
+            function updateTokenCounter(data) {
+                const { 
+                    plan, current_usage, daily_limit, usage_percentage,
+                    remaining, limit_reached, budget_exceeded
+                } = data;
+                
+                // Update the counter value
+                const tokenCountValue = document.getElementById('tokenCountValue');
+                tokenCountValue.textContent = remaining;
+                
+                // Update tooltip content
+                const tokenPlanName = document.getElementById('tokenPlanName');
+                tokenPlanName.textContent = plan.charAt(0).toUpperCase() + plan.slice(1);
+                
+                const tokenUsedCount = document.getElementById('tokenUsedCount');
+                tokenUsedCount.textContent = current_usage;
+                
+                const tokenDailyLimit = document.getElementById('tokenDailyLimit');
+                tokenDailyLimit.textContent = daily_limit;
+                
+                const tokenRemainingCount = document.getElementById('tokenRemainingCount');
+                tokenRemainingCount.textContent = remaining;
+                
+                // Update tooltip progress bar
+                const tooltipProgressBar = document.querySelector('.token-tooltip .progress-bar');
+                tooltipProgressBar.style.width = `${usage_percentage}%`;
+                tooltipProgressBar.setAttribute('aria-valuenow', usage_percentage);
+                
+                // Set progress bar color
+                tooltipProgressBar.className = 'progress-bar';
+                if (usage_percentage > 90) {
+                    tooltipProgressBar.classList.add('bg-danger');
+                } else if (usage_percentage > 70) {
+                    tooltipProgressBar.classList.add('bg-warning');
+                } else {
+                    tooltipProgressBar.classList.add('bg-success');
+                }
+                
+                // Update token display color based on usage
+                const tokenDisplay = document.querySelector('.token-display');
+                if (limit_reached || budget_exceeded) {
+                    tokenDisplay.style.color = '#ff4d4d';
+                } else if (usage_percentage > 90) {
+                    tokenDisplay.style.color = '#ffcc00';
+                } else {
+                    tokenDisplay.style.color = '#ffffff';
+                }
+                
+                // Update profile tooltip content
+                const profilePlanName = document.getElementById('profilePlanName');
+                if (profilePlanName) profilePlanName.textContent = plan.charAt(0).toUpperCase() + plan.slice(1);
+                const profileUsed = document.getElementById('profileTokenUsed');
+                if (profileUsed) profileUsed.textContent = current_usage;
+                const profileLimit = document.getElementById('profileDailyLimit');
+                if (profileLimit) profileLimit.textContent = daily_limit;
+                const profileRem = document.getElementById('profileRemaining');
+                if (profileRem) profileRem.textContent = remaining;
+            }
+            
+            // Set up token counter tooltip display
+            const tokenCounter = document.getElementById('tokenCounter');
+            const tokenTooltip = document.getElementById('tokenTooltip');
+            
+            tokenCounter.addEventListener('mouseenter', function() {
+                tokenTooltip.style.display = 'block';
+            });
+            
+            tokenCounter.addEventListener('mouseleave', function() {
+                tokenTooltip.style.display = 'none';
+            });
+            
+            // Profile tooltip hover behavior
+            const userProfile = document.getElementById('userProfile');
+            const profileTooltip = document.getElementById('profileTooltip');
+            if (userProfile && profileTooltip) {
+                userProfile.addEventListener('mouseenter', function() {
+                    profileTooltip.style.display = 'block';
+                });
+                userProfile.addEventListener('mouseleave', function(e) {
+                    if (!profileTooltip.contains(e.relatedTarget)) {
+                        profileTooltip.style.display = 'none';
+                    }
+                });
+            }
+            
+            // Function to check token usage
+            function checkTokenUsage() {
+                fetch('/api/usage/check')
+                    .then(response => response.json())
+                    .then(data => {
+                        const { 
+                            plan, current_usage, daily_limit, usage_percentage,
+                            remaining, limit_reached, budget_exceeded
+                        } = data;
+                        
+                        // Prepare notification elements
+                        const tokenMessage = document.getElementById('tokenMessage');
+                        const tokenDetails = document.getElementById('tokenDetails');
+                        const progressBar = document.querySelector('.token-progress .progress-bar');
+                        const upgradeButtonContainer = document.getElementById('upgradeButtonContainer');
+                        
+                        // Update token counter display
+                        updateTokenCounter(data);
+                        
+                        // Update progress bar
+                        progressBar.style.width = `${usage_percentage}%`;
+                        progressBar.setAttribute('aria-valuenow', usage_percentage);
+                        
+                        // Set appropriate color
+                        progressBar.className = 'progress-bar';
+                        if (usage_percentage > 90) {
+                            progressBar.classList.add('bg-danger');
+                        } else if (usage_percentage > 70) {
+                            progressBar.classList.add('bg-warning');
+                        } else {
+                            progressBar.classList.add('bg-success');
+                        }
+                        
+                        // Determine if we should show a notification
+                        let shouldNotify = false;
+                        let currentStatus = null;
+                        
+                        if (budget_exceeded) {
+                            tokenMessage.textContent = "Our monthly API budget has been reached. Service will resume at the start of the next billing cycle.";
+                            tokenDetails.textContent = "We apologize for the inconvenience.";
+                            upgradeButtonContainer.style.display = 'none';
+                            currentStatus = 'budget_exceeded';
+                            shouldNotify = true;
+                        } else if (limit_reached) {
+                            if (plan === 'free') {
+                                tokenMessage.textContent = "You've reached your daily free token limit.";
+                                tokenDetails.textContent = `Upgrade to premium for ${daily_limit * 3.33 | 0} tokens per day.`;
+                                upgradeButtonContainer.style.display = 'block';
+                                currentStatus = 'free_limit_reached';
+                            } else {
+                                tokenMessage.textContent = "You've reached your daily token limit.";
+                                tokenDetails.textContent = "Your limit will reset at midnight UTC.";
+                                upgradeButtonContainer.style.display = 'none';
+                                currentStatus = 'premium_limit_reached';
+                            }
+                            shouldNotify = true;
+                        } else if (usage_percentage > 90) {
+                            tokenMessage.textContent = "You're approaching your daily token limit.";
+                            tokenDetails.textContent = `${remaining} tokens remaining (${usage_percentage}% used)`;
+                            upgradeButtonContainer.style.display = plan === 'free' ? 'block' : 'none';
+                            currentStatus = 'approaching_limit';
+                            shouldNotify = true;
+                        }
+                        
+                        // Only show notification if status changed
+                        if (shouldNotify && currentStatus !== lastNotificationStatus) {
+                            tokenToast.show();
+                            lastNotificationStatus = currentStatus;
+                        }
+                    })
+                    .catch(error => console.error('Error checking token usage:', error));
+            }
+            
+            // Check token usage initially and every 5 minutes
+            checkTokenUsage();
+            setInterval(checkTokenUsage, 5 * 60 * 1000);
+              // Also check after each API response
+            const originalFetch = window.fetch;
+            window.fetch = function() {
+                return originalFetch.apply(this, arguments)
+                    .then(response => {
+                        const url = arguments[0];
+                        if (typeof url === 'string' && 
+                            (url.includes('/api/chat') || 
+                             url.includes('/study/chat') || 
+                             url.includes('/entertainment/chat'))) {
+                            // Wait a moment for the usage to be updated in the database
+                            setTimeout(checkTokenUsage, 1000);
+                        }
+                        return response;
+                    });
+            };
+            
+            // Settings Modal Buttons Handler 
+            const settingsOpenBtns = document.querySelectorAll('[data-settings-open]');
+            const settingsUpgradeBtn = document.getElementById('settings-upgrade-btn');
+            const settingsManageSubBtn = document.getElementById('settings-manage-sub-btn');
+            
+            if (settingsOpenBtns.length > 0) {
+                settingsOpenBtns.forEach(btn => {
+                    btn.addEventListener('click', function(e) {
+                        e.preventDefault();
+                        // The modal opening itself is handled by the settings-modal.js
+                    });
+                });
+            }
+            
+            if (settingsUpgradeBtn) {
+                settingsUpgradeBtn.addEventListener('click', function() {
+                    window.location.href = '/account';
+                });
+            }
+            
+            if (settingsManageSubBtn) {
+                settingsManageSubBtn.addEventListener('click', function() {
+                    // Show loading state
+                    settingsManageSubBtn.disabled = true;
+                    settingsManageSubBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Loading...';
+                    
+                    fetch('/create-customer-portal-session', {
+                        method: 'POST',
+                        headers: {
+                            'Content-Type': 'application/json',
+                        }
+                    })
+                    .then(function(response) {
+                        return response.json();
+                    })
+                    .then(function(data) {
+                        if (data.error) {
+                            alert(data.error);
+                            // Reset button state
+                            settingsManageSubBtn.disabled = false;
+                            settingsManageSubBtn.innerHTML = 'Manage Subscription';
+                            return;
+                        }
+                        // Redirect to Stripe Customer Portal
+                        window.location.href = data.url;
+                    })
+                    .catch(function(error) {
+                        console.error('Error:', error);
+                        alert('An error occurred. Please try again later.');
+                        // Reset button state
+                        settingsManageSubBtn.disabled = false;
+                        settingsManageSubBtn.innerHTML = 'Manage Subscription';
+                    });
+                });
+            }
+        });
+        {% endif %}    </script>
+
+    <!-- Settings Modal -->
+    <div class="settings-modal-overlay" id="settingsModalOverlay">
+        <div class="settings-modal-container" id="settingsModal">
+            <div class="settings-header">
+                <h3 class="settings-title">Settings</h3>
+                <button id="settingsCloseBtn" class="settings-close">&times;</button>
+            </div>
+            <div class="settings-content">
+                <!-- Settings Sidebar -->
+                <div class="settings-sidebar">
+                    <div class="settings-nav-item active" data-tab="settings-tab-general">
+                        <i class="fas fa-cog settings-nav-icon"></i> General
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-notifications">
+                        <i class="fas fa-bell settings-nav-icon"></i> Notifications
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-personalization">
+                        <i class="fas fa-palette settings-nav-icon"></i> Personalization
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-speech">
+                        <i class="fas fa-microphone settings-nav-icon"></i> Speech
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-data">
+                        <i class="fas fa-database settings-nav-icon"></i> Data controls
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-profile">
+                        <i class="fas fa-user-cog settings-nav-icon"></i> Builder profile
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-apps">
+                        <i class="fas fa-plug settings-nav-icon"></i> Connected apps
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-security">
+                        <i class="fas fa-shield-alt settings-nav-icon"></i> Security
+                    </div>
+                    <div class="settings-nav-item" data-tab="settings-tab-account">
+                        <i class="fas fa-user-circle settings-nav-icon"></i> Account
+                    </div>
+                </div>
+                
+                <!-- Settings Main Content -->
+                <div class="settings-main">
+                    <!-- General Tab -->
+                    <div class="settings-tab active" id="settings-tab-general">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Subscription Status</h4>
+                            <div class="settings-form-group">                                <label class="settings-label">Current Plan</label>
+                                <div>
+                                    {% if plan|default('free') == 'premium' %}
+                                    <span class="badge bg-success">Premium</span>
+                                    {% else %}
+                                    <span class="badge bg-secondary">Free</span>
+                                    {% endif %}
+                                    
+                                    {% if plan|default('free') != 'premium' %}
+                                    <button id="settings-upgrade-btn" class="settings-btn settings-btn-primary ms-2">
+                                        <i class="fas fa-star me-1"></i> Upgrade to Premium                                    </button>
+                                    {% else %}
+                                    <button id="settings-manage-sub-btn" class="settings-btn settings-btn-outline ms-2">
+                                        Manage Subscription
+                                    </button>
+                                    {% endif %}
+                                </div>
+                            </div>
+                            
+                            <div class="settings-form-group">
+                                <label class="settings-label">Daily Token Usage</label>
+                                <div class="settings-progress">
+                                    <div class="settings-progress-bar" style="width: {{ usage_percentage|default(0) }}%"></div>
+                                </div>                                <div class="settings-progress-label">
+                                    <span id="settings-tokens-used">{{ current_usage|default(0) }}</span> / <span id="settings-tokens-total">{{ daily_limit|default(25000) }}</span> tokens used
+                                </div>
+                                
+                                <div class="settings-usage-details">
+                                    <div class="settings-usage-item">
+                                        <div class="settings-usage-value" id="settings-tokens-remaining">{{ (daily_limit|default(25000)) - (current_usage|default(0)) }}</div>
+                                        <div class="settings-usage-label">Remaining</div>
+                                    </div>
+                                    <div class="settings-usage-item">
+                                        <div class="settings-usage-value">{{ usage_percentage|default(0) }}%</div>
+                                        <div class="settings-usage-label">Used</div>
+                                    </div>
+                                    <div class="settings-usage-item">
+                                        <div class="settings-usage-value">{{ daily_limit|default(25000) }}</div>
+                                        <div class="settings-usage-label">Total</div>
+                                    </div>
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Theme</h4>
+                            <div class="settings-form-group">
+                                <label class="settings-label" for="settings-theme">App Theme</label>
+                                <select id="settings-theme" class="settings-select">
+                                    <option value="system" selected>System</option>
+                                    <option value="light">Light</option>
+                                    <option value="dark">Dark</option>
+                                </select>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Display Options</h4>
+                            <div class="settings-form-group">
+                                <label class="settings-toggle-label">
+                                    <span class="settings-toggle-text">Always show code when using data analyst</span>
+                                    <label class="settings-toggle">
+                                        <input type="checkbox" id="settings-show-code">
+                                        <span class="settings-toggle-slider"></span>
+                                    </label>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Notifications Tab -->
+                    <div class="settings-tab" id="settings-tab-notifications">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Chat Notifications</h4>
+                            <div class="settings-form-group">
+                                <label class="settings-toggle-label">
+                                    <span class="settings-toggle-text">Show follow up suggestions in chats</span>
+                                    <label class="settings-toggle">
+                                        <input type="checkbox" id="settings-follow-ups" checked>
+                                        <span class="settings-toggle-slider"></span>
+                                    </label>
+                                </label>
+                            </div>
+                        </div>
+                    </div>
+                    
+                    <!-- Personalization Tab -->
+                    <div class="settings-tab" id="settings-tab-personalization">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Personalization</h4>
+                            <p>Personalization options will be available soon.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Speech Tab -->
+                    <div class="settings-tab" id="settings-tab-speech">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Speech</h4>
+                            <p>Speech options will be available soon.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Data Controls Tab -->
+                    <div class="settings-tab" id="settings-tab-data">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Data Controls</h4>
+                            <p>Data control options will be available soon.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Builder Profile Tab -->
+                    <div class="settings-tab" id="settings-tab-profile">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Builder Profile</h4>
+                            <p>Builder profile options will be available soon.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Connected Apps Tab -->
+                    <div class="settings-tab" id="settings-tab-apps">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Connected Apps</h4>
+                            <p>Connected apps options will be available soon.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Security Tab -->
+                    <div class="settings-tab" id="settings-tab-security">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Security</h4>
+                            <p>Security options will be available soon.</p>
+                        </div>
+                    </div>
+                    
+                    <!-- Account Tab -->
+                    <div class="settings-tab" id="settings-tab-account">
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Referral Program</h4>
+                            <div class="settings-referral-box">
+                                <div class="settings-referral-title">
+                                    <i class="fas fa-user-friends settings-referral-icon"></i>
+                                    Invite friends and get rewarded!
+                                </div>
+                                <p>When someone signs up through your referral link and purchases a premium plan, 
+                                    you get <strong>7 days of the same plan added</strong> to your account.</p>
+                                
+                                <div class="settings-usage-details mb-3">
+                                    <div class="settings-usage-item">
+                                        <div class="settings-usage-value" id="settings-total-referrals">0</div>
+                                        <div class="settings-usage-label">Completed</div>
+                                    </div>
+                                    <div class="settings-usage-item">
+                                        <div class="settings-usage-value" id="settings-pending-referrals">0</div>
+                                        <div class="settings-usage-label">Pending</div>
+                                    </div>
+                                </div>
+                                  <div class="settings-referral-input">
+                                    <input type="text" id="settings-referral-link" class="settings-input" placeholder="Your referral link will appear here..." readonly>
+                                    <button id="settings-copy-referral" class="settings-btn-copy">
+                                        <i class="fas fa-copy"></i> Copy
+                                    </button>
+                                </div>
+                                <div id="settings-copy-success" class="settings-success-message">
+                                    <i class="fas fa-check-circle"></i> Link copied to clipboard!
+                                </div>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Chat Management</h4>
+                            <div class="settings-form-group">
+                                <label class="settings-label">Manage Archived Chats</label>
+                                <button id="settings-manage-chats" class="settings-btn settings-btn-outline">
+                                    <i class="fas fa-archive me-1"></i> Manage
+                                </button>
+                            </div>
+                            <div class="settings-form-group">
+                                <label class="settings-label">Archive All Chats</label>
+                                <button id="settings-archive-all" class="settings-btn settings-btn-outline">
+                                    <i class="fas fa-archive me-1"></i> Archive All
+                                </button>
+                            </div>
+                            <div class="settings-form-group">
+                                <label class="settings-label">Delete All Chats</label>
+                                <button id="settings-delete-all" class="settings-btn settings-btn-danger">
+                                    <i class="fas fa-trash-alt me-1"></i> Delete All
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <div class="settings-section">
+                            <h4 class="settings-section-title">Account Actions</h4>
+                            <button id="settings-logout" class="settings-btn settings-btn-outline">
+                                <i class="fas fa-sign-out-alt me-1"></i> Log out on this device
+                            </button>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Modal Script -->
+    <script src="/static/js/settings-modal.js"></script>
+</body>
+</html>

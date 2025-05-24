@@ -1,0 +1,260 @@
+{% extends "base.html" %}
+
+{% block title %}Admin Dashboard - LightYearAI{% endblock %}
+
+{% block content %}
+<div class="container-fluid py-4">
+    <h1 class="mb-4">Admin Dashboard</h1>
+
+    <!-- Overview Cards -->
+    <div class="row mb-4">
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-primary shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-primary text-uppercase mb-1">
+                                Total Users</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ dashboard_data.total_users }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-users fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-success shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-success text-uppercase mb-1">
+                                Premium Users</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ dashboard_data.premium_users }}</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-crown fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-info shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-info text-uppercase mb-1">Daily Token Usage
+                            </div>
+                            <div class="row no-gutters align-items-center">
+                                <div class="col-auto">
+                                    <div class="h5 mb-0 mr-3 font-weight-bold text-gray-800">{{ dashboard_data.daily_usage }}</div>
+                                </div>
+                            </div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-clipboard-list fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+
+        <div class="col-xl-3 col-md-6 mb-4">
+            <div class="card border-left-warning shadow h-100 py-2">
+                <div class="card-body">
+                    <div class="row no-gutters align-items-center">
+                        <div class="col mr-2">
+                            <div class="text-xs font-weight-bold text-warning text-uppercase mb-1">
+                                Monthly Budget Usage</div>
+                            <div class="h5 mb-0 font-weight-bold text-gray-800">{{ dashboard_data.budget_percentage | round(1) }}%</div>
+                        </div>
+                        <div class="col-auto">
+                            <i class="fas fa-dollar-sign fa-2x text-gray-300"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Monthly Budget Progress -->
+    <div class="row mb-4">
+        <div class="col-lg-12">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3 d-flex flex-row align-items-center justify-content-between">
+                    <h6 class="m-0 font-weight-bold text-primary">Monthly API Budget Usage</h6>
+                </div>
+                <div class="card-body">
+                    <h4 class="small font-weight-bold">{{ dashboard_data.monthly_usage }} / {{ dashboard_data.monthly_budget }} tokens <span
+                            class="float-right">{{ dashboard_data.budget_percentage | round(1) }}%</span></h4>
+                    <div class="progress mb-4">
+                        <div class="progress-bar 
+                            {% if dashboard_data.budget_percentage > 90 %}bg-danger
+                            {% elif dashboard_data.budget_percentage > 70 %}bg-warning
+                            {% else %}bg-success{% endif %}" 
+                            role="progressbar" style="width: {{ dashboard_data.budget_percentage }}%"
+                            aria-valuenow="{{ dashboard_data.budget_percentage }}" aria-valuemin="0"
+                            aria-valuemax="100"></div>
+                    </div>
+                    <p class="mb-0">
+                        <small class="text-muted">Monthly budget: {{ dashboard_data.monthly_budget }} tokens (~$12.50 / 50 PLN)</small>
+                    </p>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Admin Actions -->
+    <div class="row mb-4">
+        <div class="col-lg-12">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">Admin Actions</h6>
+                </div>
+                <div class="card-body">
+                    <div class="row">
+                        <div class="col-md-6">
+                            <div class="card mb-4">
+                                <div class="card-body">
+                                    <h5 class="card-title">Reset Daily Usage</h5>
+                                    <p class="card-text">This will reset the daily token usage counter for all users.</p>
+                                    <form action="{{ url_for('admin_reset_daily_usage') }}" method="post">
+                                        <button type="submit" class="btn btn-warning">Reset All Counters</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+
+                        <div class="col-md-6">
+                            <div class="card mb-4">
+                                <div class="card-body">
+                                    <h5 class="card-title">Update User Limit</h5>
+                                    <p class="card-text">Set a custom token limit for a specific user.</p>
+                                    <form action="{{ url_for('admin_update_user_limit') }}" method="post">
+                                        <div class="form-group mb-3">
+                                            <label for="user_id">User ID</label>
+                                            <input type="text" class="form-control" id="user_id" name="user_id" required>
+                                        </div>
+                                        <div class="form-group mb-3">
+                                            <label for="new_limit">New Token Limit</label>
+                                            <input type="number" class="form-control" id="new_limit" name="new_limit" min="1000" required>
+                                        </div>
+                                        <button type="submit" class="btn btn-primary">Update Limit</button>
+                                    </form>
+                                </div>
+                            </div>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- User Token Usage Table -->
+    <div class="row">
+        <div class="col-lg-12">
+            <div class="card shadow mb-4">
+                <div class="card-header py-3">
+                    <h6 class="m-0 font-weight-bold text-primary">User Token Usage ({{ dashboard_data.today }})</h6>
+                </div>
+                <div class="card-body">
+                    <div class="table-responsive">
+                        <table class="table table-bordered" id="usageTable" width="100%" cellspacing="0">
+                            <thead>
+                                <tr>
+                                    <th>User</th>
+                                    <th>Plan</th>
+                                    <th>Today's Usage</th>
+                                    <th>Yesterday's Usage</th>
+                                    <th>Subscription Status</th>
+                                    <th>Actions</th>
+                                </tr>
+                            </thead>
+                            <tbody>
+                                {% for user in dashboard_data.usage_by_user %}
+                                <tr>
+                                    <td>{{ user.email }}</td>
+                                    <td>
+                                        {% if user.plan == 'premium' %}
+                                        <span class="badge bg-success">Premium</span>
+                                        {% else %}
+                                        <span class="badge bg-secondary">Free</span>
+                                        {% endif %}
+                                    </td>
+                                    <td>{{ user.today_usage }}</td>
+                                    <td>{{ user.yesterday_usage }}</td>
+                                    <td>{{ user.subscription_status or 'N/A' }}</td>
+                                    <td>
+                                        <button class="btn btn-sm btn-primary edit-limit-btn" 
+                                                data-user-id="{{ user.user_id }}" 
+                                                data-bs-toggle="modal" 
+                                                data-bs-target="#editLimitModal">
+                                            Set Limit
+                                        </button>
+                                    </td>
+                                </tr>
+                                {% endfor %}
+                            </tbody>
+                        </table>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Edit Limit Modal -->
+<div class="modal fade" id="editLimitModal" tabindex="-1" aria-labelledby="editLimitModalLabel" aria-hidden="true">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <h5 class="modal-title" id="editLimitModalLabel">Set Custom Token Limit</h5>
+                <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+            </div>
+            <form action="{{ url_for('admin_update_user_limit') }}" method="post">
+                <div class="modal-body">
+                    <div class="mb-3">
+                        <label for="modal_user_id" class="form-label">User ID</label>
+                        <input type="text" class="form-control" id="modal_user_id" name="user_id" readonly>
+                    </div>
+                    <div class="mb-3">
+                        <label for="modal_new_limit" class="form-label">New Token Limit</label>
+                        <input type="number" class="form-control" id="modal_new_limit" name="new_limit" min="1000" required>
+                    </div>
+                </div>
+                <div class="modal-footer">
+                    <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">Close</button>
+                    <button type="submit" class="btn btn-primary">Save changes</button>
+                </div>
+            </form>
+        </div>
+    </div>
+</div>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Handle modal data
+        const editLimitButtons = document.querySelectorAll('.edit-limit-btn');
+        editLimitButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const userId = this.getAttribute('data-user-id');
+                document.getElementById('modal_user_id').value = userId;
+            });
+        });
+        
+        // Initialize DataTable for better table management
+        try {
+            $('#usageTable').DataTable({
+                order: [[2, 'desc']], // Sort by today's usage by default
+                pageLength: 25
+            });
+        } catch (e) {
+            console.log("DataTables not available, using standard table:", e);
+        }
+    });
+</script>
+{% endblock %}

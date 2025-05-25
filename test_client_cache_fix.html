@@ -1,0 +1,172 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Test Client-Side Cache Fix</title>
+    <style>
+        body { font-family: Arial, sans-serif; margin: 20px; }
+        .container { max-width: 800px; margin: 0 auto; }
+        .section { margin: 20px 0; padding: 15px; border: 1px solid #ddd; border-radius: 5px; }
+        .upload-btn { padding: 10px 20px; background: #007bff; color: white; border: none; border-radius: 5px; cursor: pointer; margin: 10px 0; }
+        .upload-btn:hover { background: #0056b3; }
+        .log { background: #f8f9fa; padding: 10px; border-radius: 5px; margin: 10px 0; font-family: monospace; white-space: pre-wrap; max-height: 300px; overflow-y: auto; }
+        .status { padding: 10px; margin: 10px 0; border-radius: 5px; }
+        .success { background: #d4edda; color: #155724; border: 1px solid #c3e6cb; }
+        .error { background: #f8d7da; color: #721c24; border: 1px solid #f5c6cb; }
+        .info { background: #d1ecf1; color: #0c5460; border: 1px solid #bee5eb; }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <h1>Client-Side File Cache Clearing Test</h1>
+        
+        <div class="section">
+            <h2>Test Instructions</h2>
+            <p>This page tests whether the client-side cache clearing fix is working correctly:</p>
+            <ol>
+                <li>Upload a file (e.g., azeri_text.txt)</li>
+                <li>Check the cache state - should show the file</li>
+                <li>Upload a different file (e.g., dataset_part1.csv)</li>
+                <li>Check cache state - should show ONLY the new file (old one cleared)</li>
+            </ol>
+        </div>
+
+        <div class="section">
+            <h2>File Upload Test</h2>
+            <input type="file" id="fileInput" accept=".txt,.csv,.pdf,.docx" style="display: none;">
+            <button class="upload-btn" onclick="triggerFileUpload()">Upload File</button>
+            <div id="uploadStatus"></div>
+        </div>
+
+        <div class="section">
+            <h2>Cache State Monitor</h2>
+            <button class="upload-btn" onclick="checkCacheState()">Check Current Cache State</button>
+            <div id="cacheState" class="log"></div>
+        </div>
+
+        <div class="section">
+            <h2>Test Log</h2>
+            <div id="testLog" class="log"></div>
+        </div>
+    </div>
+
+    <!-- Include the agent.js file -->
+    <script src="/static/js/agent.js"></script>
+    
+    <script>
+        // Initialize the agent for testing
+        let testAgent;
+        
+        // Initialize when DOM is loaded
+        document.addEventListener('DOMContentLoaded', function() {
+            // Create a test instance of the agent
+            testAgent = new LiyaAgent('test-container', {});
+            
+            // Log initial state
+            log('Test page loaded and agent initialized');
+            log('Initial cache state:');
+            checkCacheState();
+        });
+
+        function log(message) {
+            const logElement = document.getElementById('testLog');
+            const timestamp = new Date().toLocaleTimeString();
+            logElement.textContent += `[${timestamp}] ${message}\n`;
+            logElement.scrollTop = logElement.scrollHeight;
+        }
+
+        function setStatus(message, type = 'info') {
+            const statusElement = document.getElementById('uploadStatus');
+            statusElement.innerHTML = `<div class="status ${type}">${message}</div>`;
+        }
+
+        function triggerFileUpload() {
+            document.getElementById('fileInput').click();
+        }
+
+        function checkCacheState() {
+            if (!testAgent) {
+                log('ERROR: Agent not initialized');
+                return;
+            }
+
+            const cacheStateElement = document.getElementById('cacheState');
+            
+            // Check all cache objects
+            const fileHistory = testAgent.fileHistory || {};
+            const uploadedFiles = testAgent.uploadedFiles || {};
+            const contextData = testAgent.contextData || {};
+
+            let cacheReport = 'CACHE STATE REPORT:\n\n';
+            
+            cacheReport += `fileHistory (${Object.keys(fileHistory).length} items):\n`;
+            for (const [filename, data] of Object.entries(fileHistory)) {
+                cacheReport += `  - ${filename}: ${data.content ? `${data.content.length} chars` : 'no content'}\n`;
+            }
+            
+            cacheReport += `\nuploadedFiles (${Object.keys(uploadedFiles).length} items):\n`;
+            for (const [filename, data] of Object.entries(uploadedFiles)) {
+                cacheReport += `  - ${filename}: ${data.content ? `${data.content.length} chars` : 'no content'}\n`;
+            }
+            
+            cacheReport += `\ncontextData.uploadedFile: ${contextData.uploadedFile ? contextData.uploadedFile.filename : 'none'}\n`;
+            cacheReport += `contextData.pdfContent: ${contextData.pdfContent ? 'present' : 'none'}\n`;
+
+            cacheStateElement.textContent = cacheReport;
+            log('Cache state checked and displayed');
+        }
+
+        // Handle file input change
+        document.getElementById('fileInput').addEventListener('change', function(e) {
+            const file = e.target.files[0];
+            if (!file) return;
+
+            log(`Starting upload of: ${file.name} (${file.size} bytes)`);
+            setStatus(`Uploading ${file.name}...`, 'info');
+
+            // Check cache BEFORE upload
+            log('Cache state BEFORE upload:');
+            checkCacheState();
+
+            // Test the uploadFile method with our cache clearing fix
+            if (testAgent && testAgent.uploadFile) {
+                testAgent.uploadFile(file)
+                    .then(result => {
+                        if (result.success) {
+                            log(`Upload successful: ${result.filename}`);
+                            setStatus(`✅ Upload successful: ${result.filename}`, 'success');
+                            
+                            // Check cache AFTER upload
+                            log('Cache state AFTER upload:');
+                            checkCacheState();
+                            
+                            // Verify the fix worked
+                            const cacheKeys = Object.keys(testAgent.fileHistory || {});
+                            if (cacheKeys.length === 1 && cacheKeys[0] === result.filename) {
+                                log('✅ CACHE CLEARING FIX WORKING: Only new file in cache');
+                                setStatus(`✅ Cache clearing fix is working correctly!`, 'success');
+                            } else {
+                                log('❌ CACHE CLEARING FIX FAILED: Multiple files in cache');
+                                setStatus(`❌ Cache clearing fix failed - multiple files detected`, 'error');
+                            }
+                        } else {
+                            log(`Upload failed: ${result.error}`);
+                            setStatus(`❌ Upload failed: ${result.error}`, 'error');
+                        }
+                    })
+                    .catch(error => {
+                        log(`Upload error: ${error}`);
+                        setStatus(`❌ Upload error: ${error}`, 'error');
+                    });
+            } else {
+                log('ERROR: uploadFile method not available');
+                setStatus('❌ Upload method not available', 'error');
+            }
+
+            // Clear the file input
+            this.value = '';
+        });
+    </script>
+</body>
+</html>

@@ -1,0 +1,190 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase Logout Test</title>
+    <style>
+        body {
+            font-family: Arial, sans-serif;
+            line-height: 1.6;
+            padding: 20px;
+            max-width: 800px;
+            margin: 0 auto;
+        }
+        h1 {
+            color: #333;
+            border-bottom: 2px solid #eee;
+            padding-bottom: 10px;
+        }
+        .test-section {
+            background-color: #f9f9f9;
+            border: 1px solid #ddd;
+            padding: 15px;
+            margin: 20px 0;
+            border-radius: 5px;
+        }
+        .console-output {
+            background-color: #333;
+            color: #fff;
+            padding: 15px;
+            border-radius: 5px;
+            font-family: monospace;
+            white-space: pre-wrap;
+            max-height: 400px;
+            overflow-y: auto;
+        }
+        .button-container {
+            margin: 20px 0;
+        }
+        button {
+            padding: 10px 15px;
+            background-color: #4CAF50;
+            color: white;
+            border: none;
+            border-radius: 4px;
+            cursor: pointer;
+            margin-right: 10px;
+        }
+        button:hover {
+            background-color: #45a049;
+        }
+        .btn-danger {
+            background-color: #f44336;
+        }
+        .btn-danger:hover {
+            background-color: #d32f2f;
+        }
+        .btn-reset {
+            background-color: #2196F3;
+        }
+        .btn-reset:hover {
+            background-color: #0b7dda;
+        }
+        .status {
+            font-weight: bold;
+            margin-top: 10px;
+        }
+        .pass {
+            color: green;
+        }
+        .fail {
+            color: red;
+        }
+    </style>
+</head>
+<body>
+    <h1>Firebase Logout Test</h1>
+    
+    <div class="test-section">
+        <h2>Test Description</h2>
+        <p>This test verifies that the loading manager correctly handles the logout state and doesn't try to create UI elements when a user has logged out.</p>
+        <p>The test sets the <code>explicitly_logged_out</code> flag in both localStorage and sessionStorage, then tries to use the LoadingManager to show a loading overlay.</p>
+        <p>If the fix is working, the loading overlay will not be created, and no "Cannot read properties of null" error will appear in the console.</p>
+    </div>
+    
+    <div class="button-container">
+        <button id="run-test">Run Test</button>
+        <button id="set-logout-flags" class="btn-danger">Set Logout Flags</button>
+        <button id="clear-logout-flags" class="btn-reset">Clear Logout Flags</button>
+        <button id="clear-console" class="btn-reset">Clear Console</button>
+    </div>
+    
+    <div class="status" id="status"></div>
+    
+    <h3>Console Output:</h3>
+    <div class="console-output" id="console-output"></div>
+    
+    <!-- Load the loading-manager.js script first -->
+    <script src="static/js/loading-manager.js"></script>
+    
+    <script>
+        // Capture console output
+        (function() {
+            const originalLog = console.log;
+            const originalError = console.error;
+            const originalWarn = console.warn;
+            const consoleOutput = document.getElementById('console-output');
+            
+            console.log = function() {
+                const args = Array.from(arguments);
+                originalLog.apply(console, args);
+                consoleOutput.innerHTML += '> ' + args.join(' ') + '\n';
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+            };
+            
+            console.error = function() {
+                const args = Array.from(arguments);
+                originalError.apply(console, args);
+                consoleOutput.innerHTML += '<span style="color: red;">> ERROR: ' + args.join(' ') + '</span>\n';
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+            };
+            
+            console.warn = function() {
+                const args = Array.from(arguments);
+                originalWarn.apply(console, args);
+                consoleOutput.innerHTML += '<span style="color: orange;">> WARNING: ' + args.join(' ') + '</span>\n';
+                consoleOutput.scrollTop = consoleOutput.scrollHeight;
+            };
+        })();
+        
+        // Test functions
+        document.getElementById('run-test').addEventListener('click', function() {
+            const status = document.getElementById('status');
+            status.className = 'status';
+            status.textContent = 'Running test...';
+            
+            try {
+                // Load and execute test script
+                const script = document.createElement('script');
+                script.src = 'firebase_logout_test.js?' + new Date().getTime(); // Add timestamp to prevent caching
+                document.body.appendChild(script);
+                
+                // Set status after a delay to allow test to complete
+                setTimeout(function() {
+                    const overlayExists = document.getElementById('global-loading-overlay') !== null;
+                    const isLoggedOut = localStorage.getItem('explicitly_logged_out') === 'true';
+                    
+                    if (isLoggedOut && !overlayExists) {
+                        status.className = 'status pass';
+                        status.textContent = 'TEST PASSED! Loading overlay was not created when logged out.';
+                    } else if (!isLoggedOut) {
+                        status.className = 'status fail';
+                        status.textContent = 'TEST INCONCLUSIVE: Logout flags not set correctly.';
+                    } else {
+                        status.className = 'status fail';
+                        status.textContent = 'TEST FAILED: Loading overlay was created despite logout flags being set.';
+                    }
+                }, 2000);
+            } catch (error) {
+                console.error('Test execution error:', error);
+                status.className = 'status fail';
+                status.textContent = 'Test execution error: ' + error.message;
+            }
+        });
+        
+        document.getElementById('set-logout-flags').addEventListener('click', function() {
+            localStorage.setItem('explicitly_logged_out', 'true');
+            sessionStorage.setItem('explicitly_logged_out', 'true');
+            console.log('Logout flags set to true in localStorage and sessionStorage');
+            console.log('Current localStorage flag:', localStorage.getItem('explicitly_logged_out'));
+            console.log('Current sessionStorage flag:', sessionStorage.getItem('explicitly_logged_out'));
+        });
+        
+        document.getElementById('clear-logout-flags').addEventListener('click', function() {
+            localStorage.removeItem('explicitly_logged_out');
+            sessionStorage.removeItem('explicitly_logged_out');
+            console.log('Logout flags cleared from localStorage and sessionStorage');
+        });
+        
+        document.getElementById('clear-console').addEventListener('click', function() {
+            document.getElementById('console-output').innerHTML = '';
+        });
+        
+        // Initial state
+        console.log('Test page loaded.');
+        console.log('Current localStorage logout flag:', localStorage.getItem('explicitly_logged_out'));
+        console.log('Current sessionStorage logout flag:', sessionStorage.getItem('explicitly_logged_out'));
+    </script>
+</body>
+</html>

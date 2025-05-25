@@ -5,6 +5,8 @@ import os
 import re
 from PyPDF2 import PdfReader
 from datetime import datetime
+import pandas as pd
+import io
 
 def extract_text_from_file(file_path):
     """Extract text from various file formats with improved error handling"""
@@ -221,10 +223,179 @@ def extract_text_from_file(file_path):
                 print(f"Error extracting text from DOCX: {docx_err}")
                 return f"Error processing DOCX file: {str(docx_err)}"
         
+        elif (file_extension in ['.csv']):
+            print(f"[CONTENT EXTRACTION] Processing CSV file: {file_path}")
+            try:
+                # Use pandas to read CSV file
+                # For large CSV files, only read a sample to prevent memory issues
+                # First get the file size
+                file_size = os.path.getsize(file_path)
+                print(f"[CONTENT EXTRACTION] CSV file size: {file_size} bytes")
+                
+                # If file is large (>5MB), use sampling
+                MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+                SAMPLE_ROWS = 1000  # Number of rows to sample from large files
+                
+                if file_size > MAX_FILE_SIZE:
+                    print(f"[CONTENT EXTRACTION] Large CSV detected, sampling {SAMPLE_ROWS} rows")
+                    
+                    # Read just the header to get column names
+                    df_header = pd.read_csv(file_path, nrows=1)
+                    num_columns = len(df_header.columns)
+                    
+                    # Read a sample of rows from the beginning
+                    df_start = pd.read_csv(file_path, nrows=SAMPLE_ROWS//2)
+                    
+                    # Get approximate total rows to provide context
+                    approx_row_size = file_size / (len(df_start) or 1) / (num_columns or 1)
+                    approx_total_rows = int(file_size / approx_row_size)
+                    
+                    # Try to read some rows from the end (if file format allows)
+                    try:
+                        df_end = pd.read_csv(file_path, skiprows=range(1, approx_total_rows - SAMPLE_ROWS//2 + 1))
+                        # Combine samples with a note
+                        df = pd.concat([df_start, df_end])
+                        note = f"\n\n[Note: This is a sample of {len(df)} rows from a large CSV with approximately {approx_total_rows:,} total rows]"
+                    except Exception:
+                        # If reading from the end fails, just use the beginning sample
+                        df = df_start
+                        note = f"\n\n[Note: This is a sample of {len(df)} rows from the beginning of a large CSV with approximately {approx_total_rows:,} total rows]"
+                else:
+                    # For smaller files, read the entire content
+                    df = pd.read_csv(file_path)
+                    note = ""
+                
+                # Add file metadata
+                metadata = f"CSV File Analysis:\n"
+                metadata += f"- Filename: {os.path.basename(file_path)}\n"
+                metadata += f"- Size: {file_size:,} bytes\n"
+                metadata += f"- Columns: {', '.join(df.columns.tolist())}\n"
+                
+                # Include basic statistics for numeric columns
+                numeric_cols = df.select_dtypes(include=['number']).columns
+                if len(numeric_cols) > 0:
+                    metadata += f"- Numeric column statistics:\n"
+                    for col in numeric_cols[:5]:  # Limit to first 5 numeric columns
+                        try:
+                            metadata += f"  * {col}: min={df[col].min()}, max={df[col].max()}, mean={df[col].mean():.2f}\n"
+                        except:
+                            pass
+                    if len(numeric_cols) > 5:
+                        metadata += f"  * (statistics for {len(numeric_cols)-5} more numeric columns not shown)\n"
+                
+                # Convert to string representation for text extraction
+                buffer = io.StringIO()
+                df.to_string(buffer, index=False)
+                text = metadata + "\n\nData Sample:\n" + buffer.getvalue() + note
+                
+                print(f"Successfully extracted {len(text)} characters from CSV file")
+                return text
+            except Exception as csv_err:
+                print(f"Error extracting text from CSV: {csv_err}")
+                return f"Error processing CSV file: {str(csv_err)}"
+        
+        elif (file_extension in ['.xlsx', '.xls']):
+            print(f"[CONTENT EXTRACTION] Processing Excel file: {file_path}")
+            try:
+                # Use pandas to read Excel file
+                # For large Excel files, only read a sample to prevent memory issues
+                # First get the file size
+                file_size = os.path.getsize(file_path)
+                print(f"[CONTENT EXTRACTION] Excel file size: {file_size} bytes")
+                
+                # If file is large (>5MB), use sampling
+                MAX_FILE_SIZE = 5 * 1024 * 1024  # 5MB
+                SAMPLE_ROWS = 1000  # Number of rows to sample from large files
+                
+                if file_size > MAX_FILE_SIZE:
+                    print(f"[CONTENT EXTRACTION] Large Excel file detected, sampling {SAMPLE_ROWS} rows")
+                    
+                    # Get sheet names
+                    xl = pd.ExcelFile(file_path)
+                    sheet_names = xl.sheet_names
+                    
+                    # Initialize empty string for results
+                    text = f"Excel File Analysis:\n"
+                    text += f"- Filename: {os.path.basename(file_path)}\n"
+                    text += f"- Size: {file_size:,} bytes\n"
+                    text += f"- Sheets: {', '.join(sheet_names)}\n\n"
+                    
+                    # Process each sheet with limited rows
+                    for sheet in sheet_names:
+                        # Read header to get column names
+                        df_header = pd.read_excel(file_path, sheet_name=sheet, nrows=1)
+                        
+                        # Read sample of rows
+                        df = pd.read_excel(file_path, sheet_name=sheet, nrows=SAMPLE_ROWS)
+                        
+                        # Add sheet information
+                        text += f"Sheet: {sheet} (sample of {len(df)} rows)\n"
+                        text += f"Columns: {', '.join(df_header.columns.tolist())}\n\n"
+                        
+                        # Convert to string
+                        buffer = io.StringIO()
+                        df.to_string(buffer, index=False)
+                        text += buffer.getvalue() + "\n\n"
+                        text += f"[Note: This is a sample from sheet '{sheet}'. Full data not shown.]\n\n"
+                        
+                        # Set a maximum number of sheets to process to prevent excessive output
+                        if len(text) > 500000:  # Limit to ~500KB of text
+                            text += f"[Note: Output truncated as it exceeded size limit. Not all sheets are fully displayed.]\n"
+                            break
+                else:
+                    # For smaller files, read the entire content with sheet names
+                    xl = pd.ExcelFile(file_path)
+                    sheet_names = xl.sheet_names
+                    
+                    text = f"Excel File Analysis:\n"
+                    text += f"- Filename: {os.path.basename(file_path)}\n"
+                    text += f"- Size: {file_size:,} bytes\n"
+                    text += f"- Sheets: {', '.join(sheet_names)}\n\n"
+                    
+                    # Process each sheet (up to a reasonable limit)
+                    for sheet_idx, sheet in enumerate(sheet_names):
+                        if sheet_idx >= 3:  # Limit to first 3 sheets
+                            text += f"[Note: {len(sheet_names) - 3} additional sheets not shown]\n"
+                            break
+                            
+                        df = pd.read_excel(file_path, sheet_name=sheet)
+                        text += f"Sheet: {sheet} ({len(df)} rows)\n"
+                        
+                        # Convert to string
+                        buffer = io.StringIO()
+                        df.head(100).to_string(buffer, index=False)  # Show only first 100 rows
+                        text += buffer.getvalue()
+                        
+                        if len(df) > 100:
+                            text += f"\n[...{len(df) - 100} more rows not shown...]\n"
+                        
+                        text += "\n\n"
+                
+                print(f"Successfully extracted {len(text)} characters from Excel file")
+                return text
+            except Exception as excel_err:
+                print(f"Error extracting text from Excel: {excel_err}")
+                return f"Error processing Excel file: {str(excel_err)}"
+        
         else:
             print(f"Unsupported file extension: {file_extension}")
-            return f"Unsupported file format: {file_extension}. Supported formats are: PDF, DOCX, and TXT."
+            return f"Unsupported file format: {file_extension}. Supported formats are: PDF, DOCX, TXT, CSV, XLSX, and XLS."
             
     except Exception as e:
         print(f"Global error in extract_text_from_file: {e}")
         return f"There was an error extracting text from this file: {str(e)}"
+
+def read_dataframe_from_file(file_path):
+    """Read data into a pandas DataFrame from CSV or Excel files"""
+    file_extension = os.path.splitext(file_path)[1].lower()
+    
+    try:
+        if file_extension == '.csv':
+            return pd.read_csv(file_path)
+        elif file_extension in ['.xlsx', '.xls']:
+            return pd.read_excel(file_path)
+        else:
+            raise ValueError(f"Unsupported file format for data transformation: {file_extension}. Use CSV or Excel files.")
+    except Exception as e:
+        print(f"Error reading data into DataFrame: {e}")
+        raise

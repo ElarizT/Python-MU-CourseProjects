@@ -16,8 +16,7 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Toggle buttons for settings options
     const toggleInputs = document.querySelectorAll('.settings-toggle input');
-    
-    // Open settings modal
+      // Open settings modal
     function openSettingsModal() {
         settingsOverlay.style.display = 'flex';
         document.body.style.overflow = 'hidden'; // Prevent scrolling behind modal
@@ -27,8 +26,12 @@ document.addEventListener('DOMContentLoaded', function() {
             settingsOverlay.style.opacity = '1';
         }, 10);
         
-        // Load latest usage data when opening settings
-        loadUserUsageData();
+        // Load latest usage data when opening settings - not during page load
+        // This prevents the introduction page from hanging
+        setTimeout(() => {
+            loadUserUsageData();
+            loadReferralData();
+        }, 100);
     }
     
     // Close settings modal
@@ -86,11 +89,16 @@ document.addEventListener('DOMContentLoaded', function() {
                         console.error('Error from API:', data.error);
                         return;
                     }
-                    
-                    // Update the progress bar
+                      // Update the progress bar
                     const progressBar = document.querySelector('.settings-progress-bar');
                     if (progressBar) {
                         progressBar.style.width = `${data.usage_percentage}%`;
+                    }
+                    
+                    // Update usage percentage display
+                    const usagePercentageEl = document.getElementById('settings-usage-percentage');
+                    if (usagePercentageEl) {
+                        usagePercentageEl.textContent = `${data.usage_percentage}%`;
                     }
                     
                     // Update text labels - check elements exist before updating
@@ -103,10 +111,9 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (tokensTotalEl) {
                         tokensTotalEl.textContent = data.daily_limit;
                     }
-                    
-                    const tokensRemainingEl = document.getElementById('settings-tokens-remaining');
+                      const tokensRemainingEl = document.getElementById('settings-tokens-remaining');
                     if (tokensRemainingEl) {
-                        tokensRemainingEl.textContent = data.daily_limit - data.current_usage;
+                        tokensRemainingEl.textContent = data.remaining || (data.daily_limit - data.current_usage);
                     }
                     
                     // Update color based on usage percentage
@@ -315,17 +322,24 @@ document.addEventListener('DOMContentLoaded', function() {
                 }
             });
         }
-        
-        // Logout button
-        const logoutBtn = document.getElementById('settings-logout');
+          // Logout button        const logoutBtn = document.getElementById('settings-logout');
         if (logoutBtn) {
             logoutBtn.addEventListener('click', function() {
-                window.location.href = '/logout';
+                // Use the auth.js signOut function if available, otherwise fallback to redirect
+                if (window.authUtils && window.authUtils.signOut) {
+                    console.log('Using authUtils.signOut() for logout');
+                    // Set explicit logout flag before calling signOut
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    window.authUtils.signOut();
+                } else {
+                    console.log('authUtils not available, redirecting to /logout_cleanup');
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    window.location.href = '/logout_cleanup?t=' + new Date().getTime();
+                }
             });
         }
     }
-    
-    // Initialize the modal
+      // Initialize the modal
     function initializeSettingsModal() {
         // Set initial state
         settingsOverlay.style.opacity = '0';
@@ -334,13 +348,11 @@ document.addEventListener('DOMContentLoaded', function() {
         // Set General tab as active by default
         switchSettingsTab('settings-tab-general');
         
-        // Load referral data if available
-        if (referralLinkInput) {
-            loadReferralData();
-        }
-        
         // Initialize event listeners
         initializeEventListeners();
+        
+        // Don't load referral data or usage stats immediately on page load
+        // This will be done when the modal is actually opened
     }
     
     // Only initialize if modal exists

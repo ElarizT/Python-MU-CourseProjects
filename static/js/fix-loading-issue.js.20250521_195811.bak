@@ -1,0 +1,55 @@
+/**
+ * Emergency fix for loading screen issues
+ * This script ensures that any stuck loading screens are properly hidden
+ */
+
+(function() {
+  'use strict';
+  
+  // Function to hide loading screen if it exists
+  function hideAnyLoadingScreens() {
+    const loadingOverlay = document.getElementById('global-loading-overlay');
+    
+    if (loadingOverlay) {
+      console.log('fix-loading-issue.js: Found and hiding loading overlay');
+      loadingOverlay.style.opacity = '0';
+      loadingOverlay.style.display = 'none'; // Force immediate hide
+    }
+
+}    // Additionally, if LoadingManager exists, call its hideLoading method
+    if (window.LoadingManager && typeof window.LoadingManager.hideLoading === 'function') {
+      console.log('fix-loading-issue.js: Calling LoadingManager.hideLoading()');
+      window.LoadingManager.hideLoading();
+    }
+  }
+  
+  // Hide loading immediately on script execution for homepage
+  if (window.location.pathname === '/' || window.location.pathname === '') {
+    console.log('Homepage detected on script load, immediately hiding loading screen');
+    hideAnyLoadingScreens();
+  }
+  
+  // Hide loading screens when DOMContentLoaded is fired
+  document.addEventListener('DOMContentLoaded', function() {
+    // For homepage, immediately hide loading
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+      console.log('Homepage detected on DOMContentLoaded, ensuring loading screen is hidden');
+      hideAnyLoadingScreens();
+    }
+    
+    // Set multiple checks to ensure loading screen gets hidden
+    hideAnyLoadingScreens(); // Immediate check
+    setTimeout(hideAnyLoadingScreens, 100); // Quick check
+    setTimeout(hideAnyLoadingScreens, 500); // Slightly later check
+    setTimeout(hideAnyLoadingScreens, 1000); // Final check
+  });
+  
+  // Hide loading screens when window is fully loaded
+  window.addEventListener('load', function() {
+    console.log('Window loaded, ensuring loading screen is hidden');
+    hideAnyLoadingScreens();
+    
+    // Set another timeout just to be extra sure
+    setTimeout(hideAnyLoadingScreens, 200);
+  });
+})();

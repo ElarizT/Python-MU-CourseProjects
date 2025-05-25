@@ -764,9 +764,31 @@ class LiyaAgent {
                 break;
             case 'entertainment':
                 moduleMessage = `<p>Switching to <strong>Entertainment Mode</strong>. Let's chat about movies, music, books, or other entertainment topics!</p>`;
-                break;
-            case 'excel':
-                moduleMessage = `<p>Switching to <strong>Excel Generator</strong>. Describe the spreadsheet you want to create.</p>`;
+                break;            case 'excel':
+                moduleMessage = `
+                    <p>Switching to <strong>Advanced Excel Agent</strong>. I can help you:</p>
+                    <ul>
+                        <li><strong>📊 Analyze existing Excel files</strong> - Upload a file to get insights, summaries, and answers</li>
+                        <li><strong>🔄 Transform Excel data</strong> - Filter, group, pivot, clean, or create new sheets</li>
+                        <li><strong>📈 Generate new spreadsheets</strong> - Create Excel files from scratch with your specifications</li>
+                    </ul>
+                    <div class="excel-agent-controls">
+                        <div class="file-upload-section">
+                            <label for="excelFileUpload" class="file-upload-btn">
+                                <i class="fas fa-upload me-2"></i>Upload Excel File (.xlsx)
+                                <input type="file" id="excelFileUpload" accept=".xlsx,.xls" style="display: none;">
+                            </label>
+                            <div id="uploadedFileName" class="uploaded-file-info" style="display: none;">
+                                <i class="fas fa-file-excel me-2"></i>
+                                <span class="file-name"></span>
+                                <button class="remove-file-btn" title="Remove file">
+                                    <i class="fas fa-times"></i>
+                                </button>
+                            </div>
+                        </div>
+                    </div>
+                    <p>Upload an Excel file to analyze or transform it, or simply describe what you want to create!</p>
+                `;
                 break;
             case 'presentation':
                 moduleMessage = `<p>Switching to <strong>Presentation Builder</strong>. Describe the presentation you want to create.</p>`;
@@ -799,9 +821,17 @@ class LiyaAgent {
         this.messageHistory.push({
             role: 'system',
             content: moduleMessage,
-            timestamp: timestamp,
-            module: moduleName
+            module: moduleName,
+            timestamp: commandTimestamp
         });
+        
+        // Set up module-specific functionality
+        if (moduleName === 'excel') {
+            // Set up Excel agent file upload handling after DOM is updated
+            setTimeout(() => {
+                this.setupExcelAgentFileUpload();
+            }, 100);
+        }
         
         // If initial text was provided, process it right away
         // We'll use a slightly later timestamp for this message to ensure proper ordering
@@ -1021,11 +1051,28 @@ class LiyaAgent {
                     category: this.contextData.category || 'all'
                 };
                 break;            case 'excel':
-                endpoint = '/generate_excel_crew';
-                payload = { 
-                    prompt: text,
-                    use_crew: true  // Enable CrewAI multi-agent system
-                };
+                // Check if we have an uploaded file
+                const uploadedFile = this.contextData.uploadedExcelFile;
+                
+                if (uploadedFile) {
+                    // Use the LangGraph Excel Agent with file upload
+                    endpoint = '/excel_agent';
+                    
+                    const formData = new FormData();
+                    formData.append('file', uploadedFile.file);
+                    formData.append('instruction', text);
+                    formData.append('session_id', this.sessionId);
+                    
+                    this.sendFormData = true;
+                    payload = formData;
+                    
+                    // Start thinking display polling
+                    this.startExcelAgentThinkingPolling();
+                } else {
+                    // No file uploaded, use traditional Excel generation
+                    endpoint = '/generate_excel';
+                    payload = { prompt: text };
+                }
                 break;case 'presentation':
                 endpoint = '/api/create-presentation';
                 
@@ -1117,7 +1164,7 @@ class LiyaAgent {
                     throw new Error(`Server returned ${response.status}: ${response.statusText}`);
                 });
             }
-            return response.json();
+            return response.json;
         })
         .then(data => {
             // Hide typing indicator
@@ -1289,25 +1336,10 @@ class LiyaAgent {
                     }
                 });
                 break;
-                  case 'excel':
+                
+            case 'excel':
                 // Handle excel generation response
                 let excelResponse = '<p>I\'ve generated an Excel spreadsheet based on your description.</p>';
-                
-                // Show generation method and quality information
-                if (data.method === 'crewai') {
-                    excelResponse += '<p><small class="text-success"><i class="fas fa-users me-1"></i><strong>Multi-Agent Enhanced:</strong> Generated using specialized AI agents for data analysis, Excel design, charts, and quality assurance.</small></p>';
-                    if (data.quality_score) {
-                        excelResponse += `<p><small class="text-info"><i class="fas fa-star me-1"></i><strong>Quality Score:</strong> ${data.quality_score}</small></p>`;
-                    }
-                    if (data.agent_details) {
-                        excelResponse += '<p><small class="text-muted"><i class="fas fa-cogs me-1"></i><strong>Agent Details:</strong> ' + JSON.stringify(data.agent_details) + '</small></p>';
-                    }
-                } else if (data.method === 'fallback') {
-                    excelResponse += '<p><small class="text-warning"><i class="fas fa-bolt me-1"></i><strong>Standard Method:</strong> Generated using the standard Excel generation system.</small></p>';
-                    if (data.warning) {
-                        excelResponse += `<p><small class="text-muted"><i class="fas fa-info-circle me-1"></i><strong>Note:</strong> ${data.warning}</small></p>`;
-                    }
-                }
                 
                 if (data.excel_url) {
                     excelResponse += `<p><a href="${data.excel_url}" target="_blank" class="btn btn-primary btn-sm"><i class="fas fa-file-excel me-1"></i> Download Excel File</a></p>`;
@@ -1320,10 +1352,7 @@ class LiyaAgent {
                     module: 'excel',
                     timestamp: timestamp,
                     metadata: {
-                        excel_url: data.excel_url,
-                        method: data.method,
-                        quality_score: data.quality_score,
-                        agent_details: data.agent_details
+                        excel_url: data.excel_url
                     }
                 });
                 break;
@@ -1838,7 +1867,7 @@ class LiyaAgent {
                 <li><a href="#" class="command-link" data-command="translate" title="Translate text between multiple languages with accurate preservation of meaning"><strong>/translate [text]</strong> 🌐</a> - Translate text between languages</li>
                 <li><a href="#" class="command-link" data-command="summarize" title="Create concise summaries of long documents while preserving key information"><strong>/summarize [text]</strong> 📝</a> - Summarize long text</li>
                 <li><a href="#" class="command-link" data-command="clear" title="Reset the conversation and start fresh while keeping your session"><strong>/clear</strong> 🧹</a> - Clear the current chat</li>
-                <li><a href="#" class="command-link" data-command="help" title="Display this list of available commands and their descriptions"><strong>/help</strong> ❓</a> - Show this help message</li>
+                <li><a href="#" class="command-link" data-command="help" title="Display a list of available commands and their descriptions"><strong>/help</strong> ❓</a> - Show this help message</li>
             </ul>
             <div class="command-feature-callout">
                 <h4>💡 Natural Language Support</h4>
@@ -1991,11 +2020,28 @@ class LiyaAgent {
      * Handle file upload and storage
      * @param {File} file - The file object to upload
      * @returns {Promise} - Promise that resolves with the upload result
-     */
-    uploadFile(file) {
+     */    uploadFile(file) {
         if (!file) {
             return Promise.reject('No file provided');
         }
+        
+        // CRITICAL FIX: Clear client-side cache before uploading new file
+        // This prevents old file data from persisting in JavaScript memory
+        console.log('Clearing client-side file cache before new upload...');
+        
+        // Clear previous file references to prevent caching issues
+        this.fileHistory = {};
+        this.uploadedFiles = {};
+        
+        // Clear any existing file context
+        if (this.contextData.uploadedFile) {
+            delete this.contextData.uploadedFile;
+        }
+        if (this.contextData.pdfContent) {
+            delete this.contextData.pdfContent;
+        }
+        
+        console.log('Client-side cache cleared successfully');
         
         // Show a user message with the file upload
         this.addMessage(`Uploading file: ${file.name}`, true);
@@ -2146,772 +2192,296 @@ class LiyaAgent {
     }
     
     /**
-     * Get all uploaded files for this session
-     * @returns {Object} - Object containing all uploaded files
+     * Set up Excel agent file upload handling
      */
-    getUploadedFiles() {
-        return this.uploadedFiles;
-    }
-    
-    /**
-     * Get a specific uploaded file by filename
-     * @param {string} filename - The filename to look for
-     * @returns {Object|null} - The file data or null if not found
-     */
-    getUploadedFile(filename) {
-        return this.uploadedFiles[filename] || null;
-    }
-
-    /**
-     * Check if user is currently logged in
-     */
-    checkLoginStatus() {
-        // If Firebase is available, use it to check login status
-        if (typeof firebase !== 'undefined' && firebase.auth) {
-            firebase.auth().onAuthStateChanged(user => {
-                this.isUserLoggedIn = !!user;
-                if (user) {
-                    console.log('User is logged in:', user.email);
-                    this.userId = user.uid;
-                } else {
-                    console.log('User is not logged in');
-                    this.userId = null;
+    setupExcelAgentFileUpload() {
+        // This will be called when Excel module is activated
+        const fileInput = document.getElementById('excelFileUpload');
+        const uploadedFileInfo = document.getElementById('uploadedFileName');
+        
+        if (fileInput) {
+            fileInput.addEventListener('change', (e) => {
+                const file = e.target.files[0];
+                if (file) {
+                    this.handleExcelFileUpload(file);
                 }
             });
-        } else {
-            // Try to check if we have a user_id in a session cookie
-            // This is a simplified check that assumes if we're logged in, certain elements would exist
-            const accountLink = document.querySelector('a[href="/account"]');
-            const loginLink = document.querySelector('a[href="/login"]');
-            
-            this.isUserLoggedIn = !!accountLink && !loginLink;
-            console.log('Login status determined from DOM:', this.isUserLoggedIn);
-            
-            // We'll make an API call to check login status more reliably
-            fetch('/api/check-login-status', {
-                method: 'GET',
-                credentials: 'same-origin'
-            })
-            .then(response => response.json())
-            .then(data => {
-                this.isUserLoggedIn = data.loggedIn;
-                this.userId = data.userId || null;
-                console.log('Login status from API:', this.isUserLoggedIn);
-                
-                // If user is logged in, load chat history for the sidebar only
-                if (this.isUserLoggedIn && this.userId) {
-                    this.loadChatHistoryForSidebar();
-                }
-            })
-            .catch(error => {
-                console.error('Error checking login status:', error);
-            });
-        }
-    }
-
-    /**
-     * Force sync of chat history with server
-     */
-    syncChatHistory() {
-        if (!this.isUserLoggedIn || !this.userId) {
-            alert('Please log in to sync your chat history across devices');
-            return;
         }
         
-        // First save the current chat
-        this.saveCurrentChat();
-        
-        // Show loading indicator
-        const syncButton = document.querySelector('.sync-button');
-        if (syncButton) {
-            syncButton.classList.add('syncing');
-            syncButton.setAttribute('disabled', 'disabled');
-            syncButton.innerHTML = '<i class="fas fa-sync fa-spin"></i>';
-        }
-        
-        // Send all local chats to server
-        const savedHistory = localStorage.getItem('unifiedChatHistory');
-        if (savedHistory) {
-            try {
-                const chats = JSON.parse(savedHistory);
-                // If no local chats, just reload from server without calling API
-                if (!Array.isArray(chats) || chats.length === 0) {
-                    // Reset sync button
-                    if (syncButton) {
-                        syncButton.classList.remove('syncing');
-                        syncButton.removeAttribute('disabled');
-                        syncButton.innerHTML = '<i class="fas fa-sync-alt"></i>';
-                    }
-                    // Reload chat history from server
-                    this.loadChatHistory();
-                    return;
-                }
-                
-                fetch('/api/sync-chats', {
-                    method: 'POST',
-                    headers: {
-                        'Content-Type': 'application/json'
-                    },
-                    body: JSON.stringify({
-                        chats: chats,
-                        userId: this.userId
-                    }),
-                    credentials: 'same-origin'
-                })
-                .then(response => response.json())
-                .then(data => {
-                    // Reset sync button
-                    if (syncButton) {
-                        syncButton.classList.remove('syncing');
-                        syncButton.removeAttribute('disabled');
-                        syncButton.innerHTML = '<i class="fas fa-sync-alt"></i>';
-                    }
-                    if (data.success) {
-                        // Reload chat history from server
-                        this.loadChatHistory();
-                        alert('Chat history synced successfully!');
-                    } else {
-                        console.error('Error syncing chats:', data.error);
-                        alert('Error syncing chat history: ' + data.error);
-                    }
-                })
-                .catch(error => {
-                    console.error('Error syncing chats:', error);
-                    alert('Error syncing chat history: ' + error.message);
-                    
-                    // Reset sync button
-                    if (syncButton) {
-                        syncButton.classList.remove('syncing');
-                        syncButton.removeAttribute('disabled');
-                        syncButton.innerHTML = '<i class="fas fa-sync-alt"></i>';
-                    }
-                });
-            } catch (error) {
-                console.error('Error parsing chat history for sync:', error);
-                alert('Error syncing chat history. Please try again.');
-                
-                // Reset sync button
-                if (syncButton) {
-                    syncButton.classList.remove('syncing');
-                    syncButton.removeAttribute('disabled');
-                    syncButton.innerHTML = '<i class="fas fa-sync-alt"></i>';
-                }
-            }
-        }
-    }
-    
-    /**
-     * Load chat history for sidebar only, without loading any chat content
-     */
-    loadChatHistoryForSidebar() {
-        // Load from server if user is logged in
-        if (this.isUserLoggedIn && this.userId) {
-            console.log('Loading chat history for sidebar for user:', this.userId);
-            fetch('/api/user-chats', {
-                method: 'GET',
-                headers: {
-                    'Content-Type': 'application/json'
-                },
-                credentials: 'same-origin'
-            })
-            .then(response => response.json())
-            .then(data => {
-                if (data.success && data.chats && data.chats.length > 0) {
-                    console.log('Server chat history loaded for sidebar:', data.chats.length, 'conversations');
-                    
-                    // Update local storage with server data
-                    localStorage.setItem('unifiedChatHistory', JSON.stringify(data.chats));
-                    
-                    // Load conversations into the sidebar only
-                    this.updateChatHistorySidebar(data.chats);
-                }
-            })
-            .catch(error => {
-                console.error('Error loading server chat history for sidebar:', error);
-                // Try using local storage for sidebar
-                const savedHistory = localStorage.getItem('unifiedChatHistory');
-                if (savedHistory) {
-                    try {
-                        const history = JSON.parse(savedHistory);
-                        this.updateChatHistorySidebar(history);
-                    } catch (error) {
-                        console.error('Error loading chat history from localStorage for sidebar:', error);
-                    }
-                }
-            });
-        } else {
-            // User not logged in, use localStorage for sidebar
-            const savedHistory = localStorage.getItem('unifiedChatHistory');
-            if (savedHistory) {
-                try {
-                    const history = JSON.parse(savedHistory);
-                    this.updateChatHistorySidebar(history);
-                } catch (error) {
-                    console.error('Error loading chat history from localStorage for sidebar:', error);
-                }
-            }
-        }
-    }
-    
-    /**
-     * Check if a message mentions any of the files we have in history
-     * @param {string} message - The message text to check
-     * @returns {string|null} - The filename if found, null otherwise
-     */
-    checkForFileMentions(message) {
-        if (!message || !this.fileHistory || Object.keys(this.fileHistory).length === 0) {
-            return null;
-        }
-        
-        // Convert message to lowercase for case-insensitive matching
-        const lowerMessage = message.toLowerCase();
-        
-        // First check if the message explicitly asks to use a file
-        if (lowerMessage.includes("use file") || 
-            lowerMessage.includes("reference file") || 
-            lowerMessage.includes("look at file") || 
-            lowerMessage.includes("open file") || 
-            lowerMessage.includes("read file") ||
-            lowerMessage.includes("refer to file") ||
-            lowerMessage.includes("use the file") ||
-            lowerMessage.includes("use document") ||
-            lowerMessage.includes("with document")) {
-            // User is explicitly asking to use a file
-        } else if (!(
-            lowerMessage.includes("use") || 
-            lowerMessage.includes("refer") ||
-            lowerMessage.includes("from") ||
-            lowerMessage.includes("open") ||
-            lowerMessage.includes("load") ||
-            lowerMessage.includes("with") ||
-            lowerMessage.includes("based on")
-        )) {
-            // If none of these keywords are in the message, it's unlikely to be a file request
-            return null;
-        }
-        
-        // More precise patterns that indicate intent to use a file
-        const filePatterns = [
-            /(?:use|open|refer\s+to|read|with|based\s+on)\s+(?:(?:the|my|this)\s+)?(?:file|document|pdf|spreadsheet|excel|presentation|doc)\s+(?:named|called)?\s*["']?([^"'.,!?\s]+(?:\s+[^"'.,!?\s]+){0,3})["']?/i,
-            /(?:file|document|pdf|spreadsheet|excel|presentation|doc)\s+(?:named|called)?\s*["']?([^"'.,!?\s]+(?:\s+[^"'.,!?\s]+){0,3})["']?/i,
-            /["']([^"']+\.(pdf|doc|docx|xlsx|xls|pptx|ppt|txt))["']/i
-        ];
-        
-        for (const pattern of filePatterns) {
-            const match = message.match(pattern);
-            if (match && match[1]) {
-                const potentialFilename = match[1].trim();
-                
-                // Check if this matches any file in our history
-                for (const filename in this.fileHistory) {
-                    // Create variations of the filename to check for
-                    const filenameWithoutExt = filename.substring(0, filename.lastIndexOf('.')) || filename;
-                    const lowerFilename = filename.toLowerCase();
-                    const lowerFilenameWithoutExt = filenameWithoutExt.toLowerCase();
-                    const lowerPotential = potentialFilename.toLowerCase();
-                    
-                    // Check for partial matches (the mentioned text is part of the filename)
-                    if (lowerFilename.includes(lowerPotential) || 
-                        lowerPotential.includes(lowerFilename) ||
-                        lowerFilenameWithoutExt.includes(lowerPotential) || 
-                        lowerPotential.includes(lowerFilenameWithoutExt)) {
-                        console.log(`File mention detected: ${filename} (matched: ${potentialFilename})`);
-                        return filename;
-                    }
-                }
-            }
-        }
-          // Fall back to simple inclusion check if patterns don't match, but be more selective
-        // Only check for exact matches or mentions with file-related context
-        const fileRelatedWords = ['file', 'document', 'pdf', 'doc', 'text', 'upload', 'using', 'refer', 'according', 'written', 'from'];
-        const hasFileContext = fileRelatedWords.some(word => lowerMessage.includes(word.toLowerCase()));
-        
-        // Only proceed with exact matching if there's file-related context
-        if (hasFileContext) {
-            for (const filename in this.fileHistory) {
-                // Create variations of the filename to check for
-                const filenameWithoutExt = filename.substring(0, filename.lastIndexOf('.')) || filename;
-                const lowerFilename = filename.toLowerCase();
-                const lowerFilenameWithoutExt = filenameWithoutExt.toLowerCase();
-                
-                // Check for more precise matches (not just inclusion)
-                // The file name should be a distinct part of the message
-                const isExactMatch = 
-                    lowerMessage.includes(` ${lowerFilename} `) || 
-                    lowerMessage.includes(` ${lowerFilename}.`) || 
-                    lowerMessage.includes(` ${lowerFilename},`) || 
-                    lowerMessage.includes(`"${lowerFilename}"`) || 
-                    lowerMessage.includes(`'${lowerFilename}'`) || 
-                    lowerMessage.includes(` ${lowerFilenameWithoutExt} `) || 
-                    lowerMessage.includes(` ${lowerFilenameWithoutExt}.`) || 
-                    lowerMessage.includes(` ${lowerFilenameWithoutExt},`) || 
-                    lowerMessage.includes(`"${lowerFilenameWithoutExt}"`) || 
-                    lowerMessage.includes(`'${lowerFilenameWithoutExt}'`) || 
-                    lowerMessage.startsWith(lowerFilename) || 
-                    lowerMessage.startsWith(lowerFilenameWithoutExt);
-                    
-                if (isExactMatch) {
-                    console.log(`File mention detected: ${filename} (direct inclusion with context)`);
-                    return filename;
-                }
-            }
-        }
-        
-        return null;
-    }
-
-    /**
-     * Add a file from history to current context
-     * @param {string} filename - The filename to add to context
-     * @returns {boolean} - Whether the file was successfully added
-     */
-    addFileToContext(filename) {
-        if (!filename || !this.fileHistory[filename]) {
-            return false;
-        }
-        
-        const fileData = this.fileHistory[filename];
-        
-        // Add file to the context for this conversation
-        this.contextData.uploadedFile = {...fileData};
-        
-        // Add content if available
-        if (fileData.content) {
-            this.contextData.pdfContent = fileData.content;
-        }
-        
-        console.log(`Added file to context: ${filename}`);
-        return true;
-    }
-
-    /**
-     * List all files available in file history
-     * @returns {Array} - Array of file objects with their names and timestamps
-     */
-    listAvailableFiles() {
-        if (!this.fileHistory || Object.keys(this.fileHistory).length === 0) {
-            return [];
-        }
-        
-        return Object.entries(this.fileHistory).map(([filename, data]) => {
-            return {
-                filename: filename,
-                timestamp: data.timestamp,
-                formattedDate: new Date(data.timestamp).toLocaleString()
-            };
-        }).sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp)); // Sort by date, newest first
-    }
-
-    /**
-     * Show a list of available files in the chat
-     */
-    showAvailableFiles() {
-        const files = this.listAvailableFiles();
-        
-        // Add user message
-        this.addMessage('list files', true);
-        
-        if (!files.length) {
-            // No files available
-            this.addMessage('You haven\'t uploaded any files yet. You can upload a file using the file upload button below the chat input.', false);
-            return;
-        }
-        
-        // Format the files list
-        let messageContent = '<p>Here are your available files:</p><div class="file-list">';
-        files.forEach((file, index) => {
-            const date = new Date(file.timestamp);
-            const formattedDate = date.toLocaleDateString() + ' ' + 
-                               date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-                               
-            messageContent += `
-                <div class="file-list-item" data-filename="${file.filename}">
-                    <div class="file-icon"><i class="fas fa-file"></i></div>
-                    <div class="file-info">
-                        <div class="file-name">${file.filename}</div>
-                        <div class="file-date">Uploaded: ${formattedDate}</div>
-                    </div>
-                    <div class="file-actions">
-                        <button class="btn btn-sm btn-outline-primary use-file-btn" title="Use this file">Use</button>
-                    </div>
-                </div>
-            `;
-        });
-        
-        messageContent += '</div><p>You can mention any of these files by name in your messages (for example: "Please use <filename>"), or click the "Use" button to start using a file.</p>';
-        
-        // Add the response message
-        const messageDiv = this.addMessage(messageContent, false);
-        
-        // Add click handlers for "Use" buttons
-        if (messageDiv) {
-            const useButtons = messageDiv.querySelectorAll('.use-file-btn');
-            useButtons.forEach(button => {
-                button.addEventListener('click', () => {
-                    const fileItem = button.closest('.file-list-item');
-                    const filename = fileItem.getAttribute('data-filename');
-                    
-                    if (filename && this.addFileToContext(filename)) {
-                        // Show file context indicator
-                        const fileContext = this.createFileContextIndicator(filename);
-                        this.chatMessages.appendChild(fileContext);
-                        this.scrollToBottom();
-                        
-                        // Add confirmation message
-                        this.addMessage(`I'll use ${filename} for our conversation. What would you like to know about it?`, false);
-                    }
-                });
-            });
-        }
-        
-        // Add to message history
-        this.messageHistory.push({
-            role: 'user',
-            content: 'list files',
-            timestamp: new Date().toISOString()
-        });
-        this.messageHistory.push({
-            role: 'assistant',
-            content: messageContent,
-            timestamp: new Date().toISOString()
-        });
-        
-        // Save to localStorage
-        this.saveCurrentChat();
-    }
-
-    /**
-     * Clear the current file context
-     * @returns {boolean} - Whether a file was cleared
-     */
-    clearFileContext() {
-        if (!this.contextData.uploadedFile && !this.contextData.pdfContent) {
-            return false; // No file to clear
-        }
-        
-        // Save what we're clearing for the message
-        const filename = this.contextData.uploadedFile?.filename || 'file';
-        
-        // Clear file context
-        delete this.contextData.uploadedFile;
-        delete this.contextData.pdfContent;
-        
-        console.log('File context cleared');
-        
-        // Add message to the chat
-        this.addMessage(`I'm no longer using "${filename}" for this conversation. If you need to reference it again, please mention it by name.`, false);
-        
-        // Save updated chat state
-        this.saveCurrentChat();
-        
-        return true;
-    }
-
-    /**
-     * Create a file context indicator with a dismiss button
-     * @param {string} filename - The filename to show in the indicator
-     * @returns {HTMLElement} - The file context indicator element
-     */
-    createFileContextIndicator(filename) {
-        const fileContext = document.createElement('div');
-        fileContext.className = 'file-context-indicator';
-        
-        const contentDiv = document.createElement('div');
-        contentDiv.className = 'file-context-content';
-        contentDiv.innerHTML = `<i class="fas fa-file-alt"></i> Now using file: ${filename}`;
-        fileContext.appendChild(contentDiv);
-        
-        const dismissBtn = document.createElement('button');
-        dismissBtn.className = 'file-context-dismiss';
-        dismissBtn.innerHTML = '×';
-        dismissBtn.title = 'Stop using this file';
-        dismissBtn.addEventListener('click', () => {
-            this.clearFileContext();
-            fileContext.remove();
-        });
-        fileContext.appendChild(dismissBtn);
-        
-        return fileContext;
-    }
-
-    /**
-     * Filter chat history based on search term
-     * @param {string} searchTerm - The term to filter by
-     */
-    filterChatHistory(searchTerm) {
-        if (!this.allChats || !this.allChats.length) {
-            return;
-        }
-        
-        searchTerm = searchTerm.toLowerCase().trim();
-        
-        if (!searchTerm) {
-            // If search is cleared, show all chats
-            this.renderChatHistoryItems(this.allChats);
-            return;
-        }
-        
-        // Filter chats based on title
-        const filteredChats = this.allChats.filter(chat => {
-            const title = chat.title.toLowerCase();
-            return title.includes(searchTerm);
-        });
-        
-        // Render the filtered chats
-        this.renderChatHistoryItems(filteredChats);
-    }
-    
-    /**
-     * Render chat history items in the sidebar
-     * @param {Array} chats - The chats to render
-     */
-    renderChatHistoryItems(chats) {
-        if (!this.chatHistory) {
-            return;
-        }
-        
-        this.chatHistory.innerHTML = '';
-          if (!chats || chats.length === 0) {
-            const noHistory = document.createElement('div');
-            noHistory.className = 'text-center text-white-50 p-3';
-            
-            const isFiltered = chats !== this.allChats && this.allChats && this.allChats.length > 0;
-            
-            if (isFiltered) {
-                noHistory.innerHTML = `
-                    <p>No matching chats</p>
-                    <button class="clear-search-btn">
-                        <i class="fas fa-times-circle me-1"></i> Clear search
-                    </button>
-                `;
-                
-                // Add clear search button functionality
-                const clearBtn = noHistory.querySelector('.clear-search-btn');
-                if (clearBtn && this.chatHistorySearch) {
-                    clearBtn.addEventListener('click', () => {
-                        this.chatHistorySearch.value = '';
-                        this.renderChatHistoryItems(this.allChats);
-                    });
-                }
-            } else {
-                noHistory.textContent = 'No previous chats';
-            }
-            
-            this.chatHistory.appendChild(noHistory);
-            return;
-        }
-        
-        chats.forEach(chat => {
-            const chatItem = document.createElement('div');
-            chatItem.className = 'chat-history-item';
-            chatItem.dataset.id = chat.id;
-            if (chat.id === this.sessionId) {
-                chatItem.classList.add('active');
-            }
-            
-            // Format date - use lastMessageAt if available, fall back to createdAt or timestamp
-            const dateString = chat.lastMessageAt || chat.createdAt || chat.timestamp;
-            const date = new Date(dateString);
-            const formattedDate = date.toLocaleDateString() + ' ' + 
-                                date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
-              // Get search term for highlighting
-            const searchTerm = this.chatHistorySearch ? this.chatHistorySearch.value.trim().toLowerCase() : '';
-            const titleWithHighlight = searchTerm ? 
-                this.highlightMatchingText(chat.title, searchTerm) : 
-                chat.title;
-            
-            // Create item content with title and date
-            chatItem.innerHTML = `
-                <div class="history-item-content">
-                    <div class="history-title">${titleWithHighlight}</div>
-                    <div class="history-date">${formattedDate}</div>
-                </div>
-                <div class="history-actions">
-                    <button class="history-rename" title="Rename chat"><i class="fas fa-edit"></i></button>
-                    <button class="history-delete" title="Delete chat"><i class="fas fa-trash"></i></button>
-                </div>
-            `;
-            
-            // Add click handler to load chat
-            chatItem.addEventListener('click', (e) => {
-                if (!e.target.closest('.history-actions')) {
-                    this.loadChatSession(chat.id);
-                }
-            });
-            
-            // Add rename button handler
-            const renameBtn = chatItem.querySelector('.history-rename');
-            if (renameBtn) {
-                renameBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.showRenameChatDialog(chat.id, chat.title);
+        // Set up remove file button
+        if (uploadedFileInfo) {
+            const removeBtn = uploadedFileInfo.querySelector('.remove-file-btn');
+            if (removeBtn) {
+                removeBtn.addEventListener('click', () => {
+                    this.removeUploadedExcelFile();
                 });
             }
-            
-            // Add delete button handler
-            const deleteBtn = chatItem.querySelector('.history-delete');
-            if (deleteBtn) {
-                deleteBtn.addEventListener('click', (e) => {
-                    e.stopPropagation();
-                    this.deleteChat(chat.id);
-                });
-            }
-            
-            this.chatHistory.appendChild(chatItem);
-        });
-    }
-
-    /**
-     * Highlight matching text in a string
-     * @param {string} text - The text to highlight within
-     * @param {string} searchTerm - The search term to highlight
-     * @returns {string} - HTML string with highlighted text
-     */
-    highlightMatchingText(text, searchTerm) {
-        if (!searchTerm || !text) {
-            return text;
         }
-        
-        searchTerm = searchTerm.toLowerCase();
-        const lowerText = text.toLowerCase();
-        const startIndex = lowerText.indexOf(searchTerm);
-        
-        if (startIndex === -1) {
-            return text;
-        }
-        
-        const endIndex = startIndex + searchTerm.length;
-        const beforeMatch = text.slice(0, startIndex);
-        const match = text.slice(startIndex, endIndex);
-        const afterMatch = text.slice(endIndex);
-        
-        return `${beforeMatch}<span class="search-highlight">${match}</span>${afterMatch}`;
-    }    /**
-     * Fetch and display files from Firebase Storage
-     */
-    fetchAndDisplayFiles() {
-        fetch('/api/list-files', {
-            method: 'GET',
-            headers: {
-                'Content-Type': 'application/json'
-            },
-            credentials: 'same-origin'
-        })
-        .then(response => response.json())
-        .then(data => {
-            if (data.success) {
-                const { files } = data;
-                const fileListContainer = document.getElementById('fileListContainer');
-                
-                if (fileListContainer) {
-                    // Clear the container
-                    fileListContainer.innerHTML = '';
-                    
-                    // Create a "no files" message
-                    if (!files || files.length === 0) {
-                        const noFilesMessage = document.createElement('div');
-                        noFilesMessage.className = 'no-files-message';
-                        noFilesMessage.textContent = "You haven't uploaded any files yet. You can upload a file using the file upload button below the chat input.";
-                        fileListContainer.appendChild(noFilesMessage);
-                        return;
-                    }
-                    
-                    // Create a file list heading
-                    const fileListHeading = document.createElement('div');
-                    fileListHeading.className = 'file-list-heading';
-                    fileListHeading.textContent = `Your Files (${files.length})`;
-                    fileListContainer.appendChild(fileListHeading);
-                    
-                    // Create a file list
-                    files.forEach(file => {
-                        const fileItem = document.createElement('div');
-                        fileItem.className = 'file-item';
-                        
-                        // Get file name, preferring display name fields
-                        const fileName = file.name || file.filename || file.stored_filename || 'Unnamed file';
-                        
-                        // Show file icon based on file type
-                        const fileExtension = fileName.split('.').pop().toLowerCase();
-                        let fileIcon = '📄'; // Default document icon
-                        
-                        if (['pdf'].includes(fileExtension)) {
-                            fileIcon = '📕';
-                        } else if (['doc', 'docx'].includes(fileExtension)) {
-                            fileIcon = '📝';
-                        } else if (['xls', 'xlsx', 'csv'].includes(fileExtension)) {
-                            fileIcon = '📊';
-                        } else if (['ppt', 'pptx'].includes(fileExtension)) {
-                            fileIcon = '📊';
-                        } else if (['jpg', 'jpeg', 'png', 'gif'].includes(fileExtension)) {
-                            fileIcon = '🖼️';
-                        }
-                        
-                        // Display the file with its icon
-                        fileItem.innerHTML = `${fileIcon} ${fileName}`;
-                        
-                        // Add click event to use the file in the chat
-                        fileItem.addEventListener('click', () => {
-                            this.selectAndUseFile(file);
-                        });
-                        
-                        fileListContainer.appendChild(fileItem);
-                    });
-                }
-            } else {
-                console.error('Failed to fetch files:', data.error);
-                
-                // Display error message
-                const fileListContainer = document.getElementById('fileListContainer');
-                if (fileListContainer) {
-                    fileListContainer.innerHTML = '<div class="error-message">Failed to load your files. Please try again later.</div>';
-                }
-            }
-        })        .catch(error => {
-            console.error('Error fetching files:', error);
-            
-            // Display error message
-            const fileListContainer = document.getElementById('fileListContainer');
-            if (fileListContainer) {
-                fileListContainer.innerHTML = '<div class="error-message">Failed to load your files. Please try again later.</div>';
-            }
-        });
     }
     
     /**
-     * Select and use a file from the file list in the chat
-     * @param {Object} file - File object containing metadata
+     * Handle Excel file upload
      */
-    selectAndUseFile(file) {
-        if (!file) return;
+    handleExcelFileUpload(file) {
+        // Validate file type
+        const allowedTypes = ['application/vnd.openxmlformats-officedocument.spreadsheetml.sheet', 'application/vnd.ms-excel'];
+        if (!allowedTypes.includes(file.type) && !file.name.match(/\.(xlsx|xls)$/i)) {
+            this.addMessage('❌ Please upload a valid Excel file (.xlsx or .xls)', false);
+            return;
+        }
         
-        // Display a message indicating the file is being used
-        const fileName = file.name || file.filename || file.stored_filename || 'selected file';
-        this.addMessage(`I'm using the uploaded file: ${fileName}`, true);
+        // Validate file size (50MB max)
+        const maxSize = 50 * 1024 * 1024;
+        if (file.size > maxSize) {
+            this.addMessage('❌ File is too large. Please upload files smaller than 50MB.', false);
+            return;
+        }
         
         // Store the file in context
-        const fileData = {
-            filename: fileName,
-            file_id: file.file_id,
-            download_url: file.download_url,
-            content: file.content || '',
-            storage_type: file.storage_type || 'firebase'
+        this.contextData.uploadedExcelFile = {
+            file: file,
+            name: file.name,
+            size: file.size,
+            uploadedAt: new Date().toISOString()
         };
         
-        // Set as current context file
-        this.contextData.uploadedFile = fileData;
+        // Update UI to show uploaded file
+        const uploadedFileInfo = document.getElementById('uploadedFileName');
+        if (uploadedFileInfo) {
+            const fileName = uploadedFileInfo.querySelector('.file-name');
+            if (fileName) {
+                fileName.textContent = file.name;
+            }
+            uploadedFileInfo.style.display = 'flex';
+        }
         
-        // Show typing indicator
-        const typingIndicator = this.showTypingIndicator();
+        // Show success message
+        this.addMessage(`✅ Excel file "${file.name}" uploaded successfully! You can now ask questions about the data or request transformations.`, false);
         
-        // Check if we need to download the file content
-        if (!fileData.content && fileData.download_url) {
-            // Just use the file without trying to download the content
-            this.hideTypingIndicator(typingIndicator);
-            this.addMessage(`I'm now using ${fileName}. What would you like to know about this file?`, false);
-        } else {
-            // We already have the content, use it directly
-            this.hideTypingIndicator(typingIndicator);
-            this.addMessage(`I'm now using ${fileName}. What would you like to know about this file?`, false);
+        // Auto-suggest some actions
+        const suggestionsMsg = `
+            <div class="excel-suggestions">
+                <p><strong>Here are some things you can try:</strong></p>
+                <div class="suggestion-chips">
+                    <button class="suggestion-chip" data-text="Analyze this data and give me a summary">📊 Analyze Data</button>
+                    <button class="suggestion-chip" data-text="Show me the structure and columns of this file">🔍 Show Structure</button>
+                    <button class="suggestion-chip" data-text="Create a pivot table for this data">📈 Create Pivot Table</button>
+                    <button class="suggestion-chip" data-text="Filter and clean this data">🧹 Clean Data</button>
+                </div>
+            </div>
+        `;
+        
+        this.addMessage(suggestionsMsg, false);
+        
+        // Add click handlers for suggestion chips
+        setTimeout(() => {
+            const chips = document.querySelectorAll('.suggestion-chip');
+            chips.forEach(chip => {
+                chip.addEventListener('click', () => {
+                    const text = chip.getAttribute('data-text');
+                    if (text && this.chatInput) {
+                        this.chatInput.value = text;
+                        this.handleChatSubmit();
+                    }
+                });
+            });
+        }, 100);
+    }
+    
+    /**
+     * Remove uploaded Excel file
+     */
+    removeUploadedExcelFile() {
+        // Clear the file from context
+        if (this.contextData.uploadedExcelFile) {
+            delete this.contextData.uploadedExcelFile;
+        }
+        
+        // Clear the file input
+        const fileInput = document.getElementById('excelFileUpload');
+        if (fileInput) {
+            fileInput.value = '';
+        }
+        
+        // Hide the uploaded file info
+        const uploadedFileInfo = document.getElementById('uploadedFileName');
+        if (uploadedFileInfo) {
+            uploadedFileInfo.style.display = 'none';
+        }
+        
+        // Show removal message
+        this.addMessage('📄 Excel file removed. You can upload a new file or describe what you want to create.', false);
+    }
+    
+    /**
+     * Start polling for Excel agent thinking updates
+     */
+    startExcelAgentThinkingPolling() {
+        if (this.thinkingPollingInterval) {
+            clearInterval(this.thinkingPollingInterval);
+        }
+        
+        // Create or show thinking sidebar
+        this.showExcelAgentThinkingSidebar();
+        
+        // Poll for thinking updates every 1 second
+        this.thinkingPollingInterval = setInterval(() => {
+            this.fetchExcelAgentThinking();
+        }, 1000);
+        
+        // Stop polling after 5 minutes (safety measure)
+        setTimeout(() => {
+            this.stopExcelAgentThinkingPolling();
+        }, 5 * 60 * 1000);
+    }
+    
+    /**
+     * Stop polling for Excel agent thinking updates
+     */
+    stopExcelAgentThinkingPolling() {
+        if (this.thinkingPollingInterval) {
+            clearInterval(this.thinkingPollingInterval);
+            this.thinkingPollingInterval = null;
+        }
+    }
+    
+    /**
+     * Fetch current thinking updates from the agent
+     */
+    async fetchExcelAgentThinking() {
+        try {
+            const response = await fetch(`/excel_agent_thinking/${this.sessionId}`, {
+                method: 'GET',
+                credentials: 'same-origin'
+            });
+            
+            if (response.ok) {
+                const data = await response.json();
+                this.updateExcelAgentThinkingDisplay(data);
+                
+                // If agent is done, stop polling
+                if (data.status === 'completed' || data.status === 'error') {
+                    this.stopExcelAgentThinkingPolling();
+                }
+            }
+        } catch (error) {
+            console.error('Error fetching Excel agent thinking:', error);
+        }
+    }
+    
+    /**
+     * Show the Excel agent thinking sidebar
+     */
+    showExcelAgentThinkingSidebar() {
+        // Create thinking sidebar if it doesn't exist
+        let thinkingSidebar = document.getElementById('excelAgentThinking');
+        
+        if (!thinkingSidebar) {
+            thinkingSidebar = document.createElement('div');
+            thinkingSidebar.id = 'excelAgentThinking';
+            thinkingSidebar.className = 'excel-thinking-sidebar';
+            thinkingSidebar.innerHTML = `
+                <div class="thinking-header">
+                    <h4><i class="fas fa-brain me-2"></i>Agent Thinking</h4>
+                    <button class="close-thinking-btn" onclick="liyaAgent.hideExcelAgentThinkingSidebar()">
+                        <i class="fas fa-times"></i>
+                    </button>
+                </div>
+                <div class="thinking-content">
+                    <div class="thinking-steps" id="thinkingSteps">
+                        <div class="thinking-step active">
+                            <i class="fas fa-spinner fa-spin me-2"></i>
+                            <span>Initializing Excel Agent...</span>
+                        </div>
+                    </div>
+                </div>
+            `;
+            
+            // Add to the page
+            document.body.appendChild(thinkingSidebar);
+        }
+        
+        // Show the sidebar
+        thinkingSidebar.classList.add('visible');
+    }
+    
+    /**
+     * Hide the Excel agent thinking sidebar
+     */
+    hideExcelAgentThinkingSidebar() {
+        const thinkingSidebar = document.getElementById('excelAgentThinking');
+        if (thinkingSidebar) {
+            thinkingSidebar.classList.remove('visible');
+        }
+        
+        this.stopExcelAgentThinkingPolling();
+    }
+    
+    /**
+     * Update the thinking display with new steps
+     */
+    updateExcelAgentThinkingDisplay(data) {
+        const stepsContainer = document.getElementById('thinkingSteps');
+        if (!stepsContainer || !data.thinking_log) return;
+        
+        // Clear existing steps
+        stepsContainer.innerHTML = '';
+        
+        // Add each thinking step
+        data.thinking_log.forEach((step, index) => {
+            const stepElement = document.createElement('div');
+            stepElement.className = 'thinking-step';
+            
+            // Determine step status
+            const isActive = index === data.thinking_log.length - 1;
+            const isCompleted = index < data.thinking_log.length - 1;
+            
+            if (isActive && data.status === 'processing') {
+                stepElement.classList.add('active');
+            } else if (isCompleted || data.status === 'completed') {
+                stepElement.classList.add('completed');
+            }
+            
+            // Add appropriate icon
+            let icon = 'fas fa-circle';
+            if (isActive && data.status === 'processing') {
+                icon = 'fas fa-spinner fa-spin';
+            } else if (isCompleted || data.status === 'completed') {
+                icon = 'fas fa-check-circle';
+            } else if (data.status === 'error') {
+                icon = 'fas fa-exclamation-circle';
+            }
+            
+            stepElement.innerHTML = `
+                <i class="${icon} me-2"></i>
+                <span>${step}</span>
+            `;
+            
+            stepsContainer.appendChild(stepElement);
+        });
+        
+        // Add progress indicator
+        if (data.total_steps) {
+            const progress = (data.current_step / data.total_steps) * 100;
+            let progressBar = document.querySelector('.thinking-progress');
+            
+            if (!progressBar) {
+                progressBar = document.createElement('div');
+                progressBar.className = 'thinking-progress';
+                progressBar.innerHTML = `
+                    <div class="progress-bar-container">
+                        <div class="progress-bar" style="width: 0%"></div>
+                    </div>
+                    <span class="progress-text">Step 0 of ${data.total_steps}</span>
+                `;
+                stepsContainer.parentNode.insertBefore(progressBar, stepsContainer);
+            }
+            
+            const bar = progressBar.querySelector('.progress-bar');
+            const text = progressBar.querySelector('.progress-text');
+            
+            if (bar) bar.style.width = `${progress}%`;
+            if (text) text.textContent = `Step ${data.current_step} of ${data.total_steps}`;
         }
     }
 }

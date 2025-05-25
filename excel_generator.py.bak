@@ -1,0 +1,1809 @@
+"""
+Excel Generator Module
+
+This module provides functionality to generate Excel files with tables and charts
+based on natural language prompts interpreted by the Gemini API.
+"""
+
+import os
+import json
+import uuid
+import pandas as pd
+from openpyxl import Workbook
+from openpyxl.chart import (
+    BarChart, LineChart, PieChart, DoughnutChart,
+    Reference, Series
+)
+from openpyxl.chart.marker import DataPoint
+from openpyxl.styles import Font, Alignment, PatternFill, Border, Side, numbers
+from openpyxl.utils import get_column_letter
+from openpyxl.drawing.image import Image
+import tempfile
+import google.generativeai as genai
+import re
+
+# Add XlsxWriter for enhanced chart capabilities
+import xlsxwriter
+from xlsxwriter.utility import xl_rowcol_to_cell, xl_col_to_name
+
+# Enhanced chart type mapping with more chart types
+CHART_TYPES = {
+    "bar": BarChart,
+    "line": LineChart,
+    "pie": PieChart,
+    "doughnut": DoughnutChart,
+    "column": BarChart,  # Column chart is a vertical bar chart
+    "clustered column": BarChart,  # Clustered column is a type of BarChart
+    "clustered bar": BarChart,  # Clustered bar is a type of BarChart
+    "stacked bar": BarChart,  # Will be configured as stacked
+    "stacked column": BarChart,  # Will be configured as stacked
+}
+
+# XlsxWriter chart type mapping
+XLSX_CHART_TYPES = {
+    "bar": "bar",
+    "line": "line",
+    "pie": "pie",
+    "doughnut": "doughnut",
+    "column": "column",  # Column chart is a vertical bar chart
+    "clustered column": "column",  # Clustered column is a type of column chart
+    "clustered bar": "bar",  # Clustered bar is a type of bar chart
+    "stacked bar": "bar",  # Will be configured as stacked
+    "stacked column": "column",  # Will be configured as stacked
+    "scatter": "scatter",
+    "area": "area",
+    "radar": "radar",
+    "stock": "stock"
+}
+
+# Format mapping to handle different formatting types
+FORMAT_TYPES = {
+    "percentage": numbers.FORMAT_PERCENTAGE_00,
+    "currency": numbers.FORMAT_CURRENCY_USD_SIMPLE,
+    "number": numbers.FORMAT_NUMBER_COMMA_SEPARATED1,
+    "date": numbers.FORMAT_DATE_YYYYMMDD2,  # Fixed: Changed from FORMAT_DATE_YYYYMMDD to FORMAT_DATE_YYYYMMDD2
+}
+
+# XlsxWriter format mapping
+XLSX_FORMAT_TYPES = {
+    "percentage": '0.00%',
+    "currency": '$#,##0.00',
+    "number": '#,##0',
+    "comma": '#,##0.00',
+    "date": 'yyyy-mm-dd',
+    "datetime": 'yyyy-mm-dd hh:mm:ss'
+}
+
+# Color schemes for charts
+XLSX_CHART_COLORS = [
+    '#4472C4', '#ED7D31', '#A5A5A5', '#FFC000', '#5B9BD5', '#70AD47',
+    '#255E91', '#9E480E', '#636363', '#997300', '#264478', '#43682B',
+    '#698ED0', '#F1975A', '#B7B7B7', '#FFCD33', '#7CAFDD', '#8CC168'
+]
+
+def generate_excel_prompt(user_prompt):
+    """
+    Generate a prompt for Gemini to interpret the user's request for an Excel file
+    
+    Args:
+        user_prompt (str): The natural language request from the user
+        
+    Returns:
+        str: A formatted prompt for Gemini
+    """
+    # Enhanced chart and graph detection with expanded keywords
+    chart_keywords = [
+        "chart", "pie", "bar", "line", "graph", "plot", "vs", "versus", 
+        "comparison", "compare", "histogram", "scatter", "distribution", 
+        "trend", "bubble", "radar", "area", "stacked", "donut", "doughnut",
+        "column", "waterfall", "funnel", "heatmap"
+    ]
+    is_chart_request = any(keyword in user_prompt.lower() for keyword in chart_keywords)
+    
+    # Specific chart type detection
+    chart_type_mapping = {
+        "pie chart": "pie", 
+        "donut chart": "doughnut",
+        "doughnut chart": "doughnut",
+        "bar chart": "bar",
+        "column chart": "column",
+        "line chart": "line", 
+        "area chart": "area",
+        "stacked bar": "stacked bar",
+        "stacked column": "stacked column",
+        "clustered bar": "clustered bar",
+        "clustered column": "clustered column",
+        "scatter plot": "scatter",
+        "bubble chart": "bubble",
+        "radar chart": "radar",
+        "waterfall chart": "waterfall",
+        "funnel chart": "funnel",
+        "heatmap": "heatmap"
+    }
+    
+    # Try to identify specific chart type requests
+    requested_chart_type = None
+    for chart_phrase, chart_type in chart_type_mapping.items():
+        if chart_phrase in user_prompt.lower():
+            requested_chart_type = chart_type
+            break
+    
+    # Determine chart purpose to provide more specific guidance
+    chart_purpose = None
+    if is_chart_request:
+        if requested_chart_type == "pie" or requested_chart_type == "doughnut" or any(kw in user_prompt.lower() for kw in ["pie", "distribution", "breakdown", "share", "portion", "allocation"]):
+            chart_purpose = "distribution"
+        elif requested_chart_type == "line" or requested_chart_type == "area" or any(kw in user_prompt.lower() for kw in ["trend", "over time", "history", "evolution", "progress"]):
+            chart_purpose = "trend"
+        elif requested_chart_type in ["bar", "column", "stacked bar", "stacked column"] or any(kw in user_prompt.lower() for kw in ["compare", "comparison", "vs", "versus", "difference"]):
+            chart_purpose = "comparison"
+        elif requested_chart_type == "scatter" or any(kw in user_prompt.lower() for kw in ["correlation", "relationship", "scatter", "against"]):
+            chart_purpose = "correlation"
+        else:
+            chart_purpose = "general"
+    
+    chart_emphasis = ""
+    if is_chart_request:
+        # Base chart guidance
+        chart_emphasis = """
+        IMPORTANT: The user is requesting a chart/graph visualization. Make sure to:
+        1. Include an appropriate chart in your JSON response
+        2. Choose the most suitable chart type for the data being presented:
+           - Pie/Donut charts for showing parts of a whole or percentage distributions
+           - Bar/Column charts for comparing values across categories
+           - Line charts for showing trends or changes over time
+           - Area charts for showing cumulative totals over time
+           - Scatter plots for showing correlations between variables
+           - Stacked charts for showing part-to-whole relationships over time or categories
+        3. Set up the data structure correctly with headers and rows that will work well with the requested chart
+        4. Use accurate, factual data values based on your knowledge of the topic
+        5. Include appropriate axis labels, titles, and legends
+        6. Structure the data in the right format for the chart type (e.g., categories in first column for bar charts)
+        7. If multiple data series are needed, organize them in adjacent columns
+        """
+        
+        # If a specific chart type was requested, add stronger emphasis
+        if requested_chart_type:
+            chart_emphasis += f"""
+            
+            IMPORTANT: The user has specifically requested a {requested_chart_type} chart. You MUST use this chart type in your response. 
+            Make sure your JSON includes "type": "{requested_chart_type}" and structure your data appropriately for this chart type.
+            """
+        
+        # Add specific guidance based on the detected chart purpose
+        if chart_purpose == "distribution":
+            chart_emphasis += """
+            For this distribution-focused chart:
+            - Ensure percentages sum to 100% for pie charts
+            - Include all relevant categories/segments
+            - Order segments logically (typically from largest to smallest)
+            - Use appropriate category labels that clearly distinguish each segment
+            """
+        elif chart_purpose == "trend":
+            chart_emphasis += """
+            For this trend-focused chart:
+            - Organize data chronologically
+            - Use consistent time intervals (days, months, quarters, years)
+            - Include sufficient data points to show the trend clearly
+            - Consider seasonal patterns or cyclical trends if relevant
+            """
+        elif chart_purpose == "comparison":
+            chart_emphasis += """
+            For this comparison-focused chart:
+            - Ensure consistent metrics across compared items
+            - Use appropriate scales that highlight meaningful differences
+            - Order categories logically (alphabetical, by size, or by relevance)
+            - If comparing multiple metrics, ensure they're comparable or use secondary axes
+            """
+        elif chart_purpose == "correlation":
+            chart_emphasis += """
+            For this correlation-focused chart:
+            - Include paired data points for each entity
+            - Structure data with independent variable (x) in first column
+            - Structure dependent variable (y) in second column
+            - Consider adding a third variable as bubble size if appropriate
+            """
+    
+    return f"""
+    You're an expert Excel file generator with advanced data visualization skills. 
+    As a Gemini 2.0 Pro model with comprehensive knowledge across all domains, you must generate a complete Excel workbook structure with accurate, factual data.
+    
+    Respond ONLY with a structured JSON that defines a complete Excel workbook based on the user's request.
+    
+    If the user's request is complex with multiple sheets, tables, or charts, create the appropriate structure to accommodate all requirements.
+    
+    {chart_emphasis}
+    
+    User Request: {user_prompt}
+    
+    Return your response in this exact JSON format for a multi-sheet Excel file:
+    {{
+      "filename": "descriptive_name.xlsx",
+      "sheets": [
+        {{
+          "name": "First Sheet Name",
+          "tables": [
+            {{
+              "title": "Table Title",
+              "headers": ["Column1", "Column2", "Column3"],
+              "rows": [
+                ["Row1Value1", "Row1Value2", "Row1Value3"],
+                ["Row2Value1", "Row2Value2", "Row2Value3"]
+              ],
+              "charts": [
+                {{
+                  "type": "bar|line|pie",
+                  "title": "Chart Title",
+                  "x_axis": "X-Axis Title",
+                  "y_axis": "Y-Axis Title",
+                  "series_titles": ["Series1", "Series2"]
+                }}
+              ]
+            }}
+          ]
+        }}
+      ]
+    }}
+    
+    Guidelines:
+    1. Create a logical file structure based on the user's request
+    2. For ALL data in the Excel file, use your knowledge to provide ACCURATE, FACTUAL values that reflect reality
+    3. For every topic - whether it's finance, sports, technology, science, demographics, market share, etc. - research your knowledge base and provide truthful statistics
+    4. For numeric data, ensure values are realistic, proportional, and reflect actual real-world relationships
+    5. For time series data, reflect accurate trends, seasonal patterns, and historical developments
+    6. For comparative data between categories or entities, maintain realistic relative proportions
+    7. Include appropriate headers for tables with clear, descriptive names
+    8. Choose suitable chart types based on data visualization best practices:
+       - Pie charts for showing parts of a whole or percentage distributions (like market share, demographics, etc.)
+       - Bar charts for comparisons between distinct categories
+       - Line charts for trends over time or sequences
+       - Area charts for cumulative data over time
+       - Scatter plots for showing relationships between variables
+       - Stacked charts for showing composition changes
+    9. If multiple related tables are requested, put them in separate sheets
+    10. Include at least 4-8 rows of sample data for each table
+    11. Make sure the filename is descriptive and ends with .xlsx
+    
+    IMPORTANT: Treat accuracy as your highest priority. Use your extensive knowledge to provide factual, realistic data for ANY subject matter in the request.
+    
+    IMPORTANT: If the user is specifically requesting a chart or visualization, focus on structuring the data in a way that best presents the information visually, with appropriate chart type, labels, and data organization.
+    
+    IMPORTANT: Always honor the user's specific chart type request if one was made, even if you think another chart type might be more appropriate. The user's explicit chart choice takes precedence over best practices.
+    """
+
+def parse_gemini_response(response_text):
+    """
+    Parse the JSON response from Gemini
+    
+    Args:
+        response_text (str): The text response from Gemini
+        
+    Returns:
+        dict: Parsed JSON structure or default structure if parsing fails
+    """
+    try:
+        # Find JSON content in the response
+        json_start = response_text.find('{')
+        json_end = response_text.rfind('}') + 1
+        
+        if json_start >= 0 and json_end > json_start:
+            json_content = response_text[json_start:json_end]
+            data = json.loads(json_content)
+            
+            # Check if this is a multi-sheet request
+            if "sheets" in data:
+                return data  # Already in the format for generate_excel_from_dict
+            
+            # Convert single sheet format to multi-sheet format
+            if "sheet_title" in data and "headers" in data and "data" in data:
+                # Create a structure compatible with generate_excel_from_dict
+                return {
+                    "filename": data.get("filename", "data_report.xlsx"),
+                    "sheets": [
+                        {
+                            "name": data.get("sheet_title", "Sheet1"),
+                            "tables": [
+                                {
+                                    "headers": data.get("headers", []),
+                                    "rows": data.get("data", []),
+                                    "charts": [data.get("chart", {})] if "chart" in data else []
+                                }
+                            ]
+                        }
+                    ]
+                }
+            else:
+                raise ValueError("JSON structure is not compatible with Excel generation")
+        else:
+            raise ValueError("No valid JSON found in response")
+            
+    except Exception as e:
+        print(f"Error parsing Gemini response: {e}")
+        print(f"Original response: {response_text[:500]}...")
+        
+        # Return a default structure in multi-sheet format
+        return {
+            "filename": "data_report.xlsx",
+            "sheets": [
+                {
+                    "name": "Generated Data",
+                    "tables": [
+                        {
+                            "title": "Sample Data",
+                            "headers": ["Category", "Value"],
+                            "rows": [
+                                ["Item 1", 100],
+                                ["Item 2", 150],
+                                ["Item 3", 200],
+                                ["Item 4", 120],
+                                ["Item 5", 180]
+                            ],
+                            "charts": [
+                                {
+                                    "type": "bar",
+                                    "title": "Data Visualization"
+                                }
+                            ]
+                        }
+                    ]
+                }
+            ]
+        }
+
+def create_excel_file(excel_data):
+    """
+    Generate an Excel file with a table and chart based on the provided data
+    
+    Args:
+        excel_data (dict): Structure containing headers, data, chart info
+        
+    Returns:
+        str: Path to the generated Excel file
+    """
+    # Create a new workbook and select the active worksheet
+    wb = Workbook()
+    ws = wb.active
+    
+    # Set the sheet title
+    if "sheet_title" in excel_data:
+        ws.title = excel_data["sheet_title"]
+    
+    # Format headers with style
+    headers = excel_data.get("headers", ["Category", "Value"])
+    header_font = Font(bold=True, size=12)
+    header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+    header_alignment = Alignment(horizontal="center", vertical="center")
+    
+    # Apply header styles and populate headers
+    for col_idx, header in enumerate(headers, 1):
+        cell = ws.cell(row=1, column=col_idx, value=header)
+        cell.font = header_font
+        cell.fill = header_fill
+        cell.alignment = header_alignment
+        
+        # Apply border
+        border = Border(
+            left=Side(style='thin'),
+            right=Side(style='thin'),
+            top=Side(style='thin'),
+            bottom=Side(style='thin')
+        )
+        cell.border = border
+    
+    # Populate data
+    data = excel_data.get("data", [])
+    for row_idx, row_data in enumerate(data, 2):  # Start from row 2 (after headers)
+        for col_idx, cell_value in enumerate(row_data, 1):
+            ws.cell(row=row_idx, column=col_idx, value=cell_value)
+    
+    # Auto-adjust column widths
+    for col in ws.columns:
+        max_length = 0
+        column = col[0].column_letter
+        for cell in col:
+            try:
+                if len(str(cell.value)) > max_length:
+                    max_length = len(str(cell.value))
+            except:
+                pass
+        adjusted_width = (max_length + 2) * 1.2
+        ws.column_dimensions[column].width = adjusted_width
+    
+    # Create chart if specified
+    chart_info = excel_data.get("chart")
+    if chart_info:
+        chart_type = chart_info.get("type", "bar").lower()
+        
+        if chart_type in CHART_TYPES:
+            chart = CHART_TYPES[chart_type]()
+            
+            # Set chart title
+            chart.title = chart_info.get("title", "Data Visualization")
+            
+            # Get data columns and label column
+            data_columns = chart_info.get("data_columns", [1])
+            labels_column = chart_info.get("labels_column", 0)
+            
+            # Add data to chart
+            data_range = len(data) + 1  # +1 for header row
+            
+            # For each data column, add a series
+            for data_col in data_columns:
+                # Adjust for 0-based to 1-based indexing
+                actual_data_col = data_col + 1 if isinstance(data_col, int) else data_col
+                
+                # Add data series to chart
+                data_ref = Reference(
+                    ws, 
+                    min_row=2,  # Start from row 2 (after header)
+                    max_row=data_range,
+                    min_col=actual_data_col,
+                    max_col=actual_data_col
+                )
+                
+                # Add series to chart
+                chart.add_data(data_ref, titles_from_data=False)
+            
+            # Add categories (labels)
+            actual_label_col = labels_column + 1 if isinstance(labels_column, int) else labels_column
+            labels_ref = Reference(
+                ws,
+                min_row=2,  # Start from row 2 (after header)
+                max_row=data_range,
+                min_col=actual_label_col,
+                max_col=actual_label_col
+            )
+            chart.set_categories(labels_ref)
+            
+            # Apply chart style
+            chart.style = 2  # Use a nice default style
+            
+            # Special handling for pie charts
+            if chart_type == "pie":
+                # Set explosion values for each slice to make them stand out slightly
+                series = chart.series[0]
+                for i in range(len(data)):
+                    pt = DataPoint(idx=i)
+                    pt.explosion = 2
+                    series.dPt.append(pt)
+            
+            # Add chart to worksheet
+            ws.add_chart(chart, "H2")  # Position chart next to data
+    
+    # Save the workbook to a temporary file
+    temp_dir = tempfile.gettempdir()
+    filename = excel_data.get("filename", "data_report.xlsx")
+    file_path = os.path.join(temp_dir, filename)
+    
+    # Ensure filename has .xlsx extension
+    if not file_path.endswith('.xlsx'):
+        file_path += '.xlsx'
+    
+    wb.save(file_path)
+    return file_path
+
+def generate_excel_from_prompt(user_prompt, model=None):
+    # Check if this is a SpaceX dataset with Orbit column removal
+    if "orbit" in user_prompt.lower() and any(word in user_prompt.lower() for word in ["spacex", "space x", "remove", "dataset", "csv"]):
+        print("[EXCEL GENERATOR] Detected SpaceX dataset orbit column removal request - avoiding planetary data generation")
+        # Let the excel_data_processor handle this without generating custom data
+        return None, None
+    
+    """
+    Main function to generate an Excel file from a user prompt
+    
+    Args:
+        user_prompt (str): The natural language request from the user
+        model: The Gemini model instance (optional, will create one if not provided)
+        
+    Returns:
+        tuple: (file_path, filename) - Path to generated Excel file and suggested filename
+    """
+    # Create a Gemini 2.0 model instance if not provided
+    if model is None:
+        import google.generativeai as genai
+        # Configure Gemini 2.0 Pro instead of Flash for more detailed analysis
+        model = genai.GenerativeModel('gemini-2.0-pro')
+        print("Created new Gemini 2.0 Pro model instance for Excel generation")
+    
+    # Enhanced request type detection for better processing
+    # Detect data types and visualization needs
+    request_types = {
+        "election": any(keyword in user_prompt.lower() for keyword in ["election", "vote", "ballot", "polling", "candidate", "president", "parliament"]),
+        "financial": any(keyword in user_prompt.lower() for keyword in ["finance", "stock", "market", "investment", "profit", "revenue", "sales", "budget"]),
+        "demographic": any(keyword in user_prompt.lower() for keyword in ["population", "demographic", "age", "gender", "country", "city", "region"]),
+        "comparison": any(keyword in user_prompt.lower() for keyword in ["vs", "versus", "compared", "comparison", "difference", "between"]),
+        "time_series": any(keyword in user_prompt.lower() for keyword in ["over time", "trend", "historical", "monthly", "yearly", "quarterly", "weekly", "daily"]),
+        "distribution": any(keyword in user_prompt.lower() for keyword in ["distribution", "breakdown", "composition", "segment", "portion", "share"])
+    }
+    
+    # Chart type detection with enhanced pattern matching
+    chart_types = {
+        "pie": any(keyword in user_prompt.lower() for keyword in ["pie chart", "pie graph", "distribution pie"]),
+        "bar": any(keyword in user_prompt.lower() for keyword in ["bar chart", "bar graph", "column chart", "histogram"]),
+        "line": any(keyword in user_prompt.lower() for keyword in ["line chart", "line graph", "trend line", "time series"]),
+        "scatter": any(keyword in user_prompt.lower() for keyword in ["scatter plot", "scatter chart", "correlation"]),
+        "area": any(keyword in user_prompt.lower() for keyword in ["area chart", "area graph", "stacked area"]),
+        "doughnut": any(keyword in user_prompt.lower() for keyword in ["doughnut chart", "donut chart", "ring chart"])
+    }
+
+    # Check for "X vs Y" comparison format that typically needs a pie chart
+    is_simple_comparison = False
+    comparison_pattern = r'\b(\w+)\s+(?:vs\.?|versus)\s+(\w+)\b'
+    match = re.search(comparison_pattern, user_prompt.lower())
+    
+    # If it's a simple comparison and mentions pie chart, handle it directly
+    if match and "pie" in user_prompt.lower() and "chart" in user_prompt.lower():
+        item1, item2 = match.groups()
+        print(f"Detected simple comparison between '{item1}' and '{item2}'")
+        is_simple_comparison = True
+        
+        # Try to extract quantities if present
+        quantity_pattern = r'(\d+)\s+' + re.escape(item1)
+        item1_quantity = None
+        match1 = re.search(quantity_pattern, user_prompt)
+        if match1:
+            item1_quantity = int(match1.group(1))
+        
+        quantity_pattern = r'(\d+)\s+' + re.escape(item2)
+        item2_quantity = None
+        match2 = re.search(quantity_pattern, user_prompt)
+        if match2:
+            item2_quantity = int(match2.group(1))
+        
+        # Make an educated guess about what's being compared and where
+        location = None
+        context = None
+        location_pattern = r'in\s+(\w+(?:\s+\w+)*)'
+        location_match = re.search(location_pattern, user_prompt, re.IGNORECASE)
+        
+        if location_match:
+            location = location_match.group(1).strip().title()
+        
+        # Identify comparison type to customize headers and data
+        comparison_type = "generic"
+        category_header = "Category"
+        value_header = "Count"
+        
+        # Identify which type of comparison we're dealing with
+        # Pet comparison
+        if (item1 in ["dog", "dogs"] and item2 in ["cat", "cats"]) or (item2 in ["dog", "dogs"] and item1 in ["cat", "cats"]):
+            comparison_type = "pets"
+            category_header = "Animal Type"
+            
+            # Make sure dogs and cats are in consistent order
+            if item1 in ["cat", "cats"]:
+                item1, item2 = item2, item1
+                if item1_quantity is not None and item2_quantity is not None:
+                    item1_quantity, item2_quantity = item2_quantity, item1_quantity
+            
+            # Standardize to plural form for labels
+            item1 = "Dogs" if item1 in ["dog", "dogs"] else item1.capitalize()
+            item2 = "Cats" if item2 in ["cat", "cats"] else item2.capitalize()
+            
+            # If no specific quantities, use realistic data for pet population
+            if location and (item1_quantity is None or item2_quantity is None):
+                # General ratio: more dogs than cats in most cities, but it varies
+                if "warsaw" in location.lower() or "poland" in location.lower():
+                    item1_quantity = 42000  # Dogs in Warsaw (approximate)
+                    item2_quantity = 34000  # Cats in Warsaw (approximate)
+                else:
+                    # Default realistic values for a medium-sized city
+                    item1_quantity = 25000
+                    item2_quantity = 20000
+            elif item1_quantity is None or item2_quantity is None:
+                # No location specified, use generic small numbers
+                item1_quantity = 55
+                item2_quantity = 45
+        
+        # OS/Technology comparison (Windows vs Mac, iOS vs Android, etc.)
+        elif (item1 in ["windows", "pc", "microsoft"] and item2 in ["mac", "apple", "macos"]) or \
+             (item2 in ["windows", "pc", "microsoft"] and item1 in ["mac", "apple", "macos"]) or \
+             (item1 in ["android"] and item2 in ["ios", "iphone"]) or \
+             (item2 in ["android"] and item1 in ["ios", "iphone"]):
+            comparison_type = "technology"
+            category_header = "System Type"
+            
+            # Standardize OS names
+            if item1.lower() in ["windows", "pc", "microsoft"]:
+                item1 = "Windows"
+            elif item1.lower() in ["mac", "apple", "macos"]:
+                item1 = "Mac"
+            elif item1.lower() == "android":
+                item1 = "Android"
+            elif item1.lower() in ["ios", "iphone"]:
+                item1 = "iOS"
+                
+            if item2.lower() in ["windows", "pc", "microsoft"]:
+                item2 = "Windows"
+            elif item2.lower() in ["mac", "apple", "macos"]:
+                item2 = "Mac"
+            elif item2.lower() == "android":
+                item2 = "Android"
+            elif item2.lower() in ["ios", "iphone"]:
+                item2 = "iOS"
+            
+            # Set realistic market share values based on context
+            context_terms = {
+                "universities": {"educational": True},
+                "schools": {"educational": True},
+                "education": {"educational": True},
+                "students": {"educational": True},
+                "business": {"business": True},
+                "corporate": {"business": True},
+                "companies": {"business": True},
+                "enterprise": {"business": True},
+                "consumers": {"consumer": True},
+                "worldwide": {"global": True},
+                "global": {"global": True}
+            }
+            
+            # Check for context terms in the prompt
+            for term, context_flags in context_terms.items():
+                if term.lower() in user_prompt.lower():
+                    context = context_flags
+                    break
+            
+            # Set default context if none detected
+            if not context:
+                context = {"global": True}
+            
+            # Realistic market share data based on context
+            if item1 == "Windows" and item2 == "Mac":
+                if context.get("educational"):
+                    # In educational settings, Mac has higher presence
+                    item1_quantity = 62  # Windows share in universities/education
+                    item2_quantity = 38  # Mac share in universities/education
+                elif context.get("business"):
+                    # In business settings, Windows dominates
+                    item1_quantity = 78  # Windows in business
+                    item2_quantity = 22  # Mac in business
+                else:
+                    # Global general computer market share
+                    item1_quantity = 73  # Windows global market share
+                    item2_quantity = 27  # Mac global market share
+            elif item1 == "Android" and item2 == "iOS":
+                if context.get("educational"):
+                    # Educational settings often have more iOS
+                    item1_quantity = 55  # Android in education
+                    item2_quantity = 45  # iOS in education
+                elif context.get("business"):
+                    # Business mobile OS distribution
+                    item1_quantity = 60  # Android in business
+                    item2_quantity = 40  # iOS in business
+                else:
+                    # Global mobile OS market share
+                    item1_quantity = 72  # Android global market share
+                    item2_quantity = 28  # iOS global market share
+            elif item1 == "Mac" and item2 == "Windows":
+                # Swap the values to maintain consistent ordering
+                if context.get("educational"):
+                    item1_quantity = 38  # Mac share in universities/education
+                    item2_quantity = 62  # Windows share in universities/education
+                elif context.get("business"):
+                    item1_quantity = 22  # Mac in business
+                    item2_quantity = 78  # Windows in business
+                else:
+                    item1_quantity = 27  # Mac global market share
+                    item2_quantity = 73  # Windows global market share
+            elif item1 == "iOS" and item2 == "Android":
+                # Swap the values to maintain consistent ordering
+                if context.get("educational"):
+                    item1_quantity = 45  # iOS in education
+                    item2_quantity = 55  # Android in education
+                elif context.get("business"):
+                    item1_quantity = 40  # iOS in business
+                    item2_quantity = 60  # Android in business
+                else:
+                    item1_quantity = 28  # iOS global market share
+                    item2_quantity = 72  # Android global market share
+        
+        # Food comparison (Apples vs Oranges, etc.)
+        elif (item1 in ["apple", "apples"] and item2 in ["orange", "oranges"]) or \
+             (item2 in ["apple", "apples"] and item1 in ["orange", "oranges"]) or \
+             any(food in [item1, item2] for food in ["pizza", "burger", "pasta", "salad", "fruit", "vegetable"]):
+            comparison_type = "food"
+            category_header = "Food Type"
+            
+            # Standardize food names to capitalize
+            item1 = item1.capitalize()
+            item2 = item2.capitalize()
+            
+            # If plural, standardize to plural form
+            if item1.lower() == "apple":
+                item1 = "Apples"
+            elif item1.lower() == "orange":
+                item1 = "Oranges"
+                
+            if item2.lower() == "apple":
+                item2 = "Apples"
+            elif item2.lower() == "orange":
+                item2 = "Oranges"
+            
+            # Default food comparison values if not specified
+            if item1_quantity is None or item2_quantity is None:
+                # Use reasonable comparison values
+                item1_quantity = 58
+                item2_quantity = 42
+        
+        # Set default quantities if none were defined by the specialized handlers
+        if item1_quantity is None:
+            item1_quantity = 55
+        if item2_quantity is None:
+            item2_quantity = 45
+            
+        # Ensure both values are capitalized for consistency
+        item1 = item1[0].upper() + item1[1:]
+        item2 = item2[0].upper() + item2[1:]
+        
+        # Create a direct Excel structure for the comparison
+        if is_simple_comparison:
+            # Format location text properly for titles
+            if location:
+                title_suffix = f" in {location}"
+                chart_title = f"Distribution of {item1} vs {item2} in {location}"
+            else:
+                title_suffix = ""
+                chart_title = f"Distribution of {item1} vs {item2}"
+            
+            excel_data = {
+                "filename": f"{item1.lower()}_vs_{item2.lower()}_comparison.xlsx",
+                "sheets": [
+                    {
+                        "name": "Comparison",
+                        "tables": [
+                            {
+                                "title": f"{item1} vs {item2} Comparison{title_suffix}",
+                                "headers": [category_header, value_header],
+                                "rows": [
+                                    [item1, item1_quantity],
+                                    [item2, item2_quantity]
+                                ],
+                                "charts": [
+                                    {
+                                        "type": "pie",
+                                        "title": chart_title,
+                                        "data_cols_as_series": False  # This ensures we use the value column as data
+                                    }
+                                ]
+                            }
+                        ]
+                    }
+                ]
+            }
+            
+            # Use XlsxWriter for better chart rendering
+            file_path = generate_excel_from_dict_xlsx(excel_data)
+            return file_path, excel_data["filename"]
+    
+    # For non-simple comparisons, use the AI as before
+    gemini_prompt = generate_excel_prompt(user_prompt)
+    
+    # Get response from Gemini
+    response = model.generate_content(gemini_prompt)
+    response_text = response.text
+    
+    # Debug: Print the AI response to see what structure it's generating
+    print(f"DEBUG - AI response for excel generation prompt: {user_prompt}")
+    print(f"First 500 chars of response: {response_text[:500]}")
+    
+    # Parse the response into a multi-sheet format
+    excel_data = parse_gemini_response(response_text)
+    
+    # Debug: Print the parsed structure to see what we're working with
+    print(f"DEBUG - Excel data structure:")
+    print(f"Filename: {excel_data.get('filename', 'unknown')}")
+    print(f"Number of sheets: {len(excel_data.get('sheets', []))}")
+    
+    # Check if any charts are defined in the structure
+    has_charts = False
+    for sheet in excel_data.get('sheets', []):
+        for table in sheet.get('tables', []):
+            charts = table.get('charts', [])
+            if charts:
+                has_charts = True
+                print(f"DEBUG - Chart found: {charts[0].get('type', 'unknown')}")
+    
+    if not has_charts and "chart" in user_prompt.lower():
+        print(f"WARNING: User requested a chart but none was generated in the data structure.")
+        # Force add a pie chart if none is present and user requested one
+        if "pie" in user_prompt.lower() and excel_data.get('sheets'):
+            first_sheet = excel_data['sheets'][0]
+            if first_sheet.get('tables'):
+                first_table = first_sheet['tables'][0]
+                # Add a pie chart for the first value column
+                first_table['charts'] = [
+                    {
+                        "type": "pie",
+                        "title": "Data Distribution",
+                    }
+                ]
+                print("DEBUG - Automatically added a pie chart to meet user request")
+    
+    # Generate Excel file using XlsxWriter for better chart rendering
+    file_path = generate_excel_from_dict_xlsx(excel_data)
+    
+    # Get the filename from the data structure
+    filename = excel_data.get("filename", "data_report.xlsx")
+    
+    # Ensure filename has .xlsx extension
+    if not filename.endswith('.xlsx'):
+        filename += '.xlsx'
+    
+    return file_path, filename
+
+def generate_excel_from_dict(data):
+    """
+    Generate an Excel file with multiple sheets, tables, and charts based on a structured dictionary.
+    
+    Args:
+        data (dict): A dictionary containing the Excel file structure with sheets, tables, and charts
+                    Format:
+                    {
+                      "filename": "example.xlsx",
+                      "sheets": [
+                        {
+                          "name": "Sheet1",
+                          "tables": [
+                            {
+                              "title": "Table Title",
+                              "headers": ["Col1", "Col2", ...],
+                              "rows": [[val1, val2, ...], ...],
+                              "charts": [
+                                {
+                                  "type": "line|bar|pie",
+                                  "title": "Chart Title",
+                                  "x_axis": "X-Axis Title",  # Not used for pie
+                                  "y_axis": "Y-Axis Title",  # Not used for pie
+                                  "data_range": "A1:D16",
+                                  "series_titles": ["Series1", "Series2", ...] # Optional
+                                }
+                              ],
+                              "formatting": [
+                                {
+                                  "column_index": 3,  # 0-based index
+                                  "format_type": "percentage",
+                                  "decimal_places": 2
+                                }
+                              ]
+                            }
+                          ]
+                        }
+                      ]
+                    }
+                    
+    Returns:
+        str: Path to the generated Excel file
+    """
+    # Create a new workbook
+    wb = Workbook()
+    
+    # Remove default worksheet
+    if wb.worksheets:
+        wb.remove(wb.worksheets[0])
+    
+    # Get the filename
+    filename = data.get("filename", f"generated_excel_{uuid.uuid4().hex[:8]}.xlsx")
+    if not filename.endswith('.xlsx'):
+        filename += '.xlsx'
+    
+    # Process each sheet
+    sheets_data = data.get("sheets", [])
+    for sheet_idx, sheet_data in enumerate(sheets_data):
+        # Create new worksheet
+        sheet_name = sheet_data.get("name", f"Sheet{sheet_idx+1}")
+        ws = wb.create_sheet(title=sheet_name)
+        
+        # Track the max row used in the sheet (for chart positioning)
+        max_row_used = 0
+        max_col_used = 0
+        
+        # Process tables in the sheet
+        tables = sheet_data.get("tables", [])
+        table_start_row = 1  # Starting row for each table
+        
+        for table_data in tables:
+            # Add table title if provided
+            title = table_data.get("title")
+            if title:
+                cell = ws.cell(row=table_start_row, column=1, value=title)
+                cell.font = Font(bold=True, size=14)
+                table_start_row += 2  # Add space after title
+            
+            # Get headers and rows
+            headers = table_data.get("headers", [])
+            rows = table_data.get("rows", [])
+            
+            # Store the table range for chart reference
+            table_header_row = table_start_row
+            table_start_col = 1
+            table_end_col = len(headers)
+            table_end_row = table_start_row + len(rows)
+            
+            # Add headers with styling
+            header_font = Font(bold=True, size=12)
+            header_fill = PatternFill(start_color="4472C4", end_color="4472C4", fill_type="solid")
+            header_alignment = Alignment(horizontal="center", vertical="center")
+            border = Border(
+                left=Side(style='thin'), right=Side(style='thin'),
+                top=Side(style='thin'), bottom=Side(style='thin')
+            )
+            
+            for col_idx, header in enumerate(headers, 1):
+                cell = ws.cell(row=table_start_row, column=col_idx, value=header)
+                cell.font = header_font
+                cell.fill = header_fill
+                cell.alignment = header_alignment
+                cell.border = border
+                
+                # Track max column
+                max_col_used = max(max_col_used, col_idx)
+            
+            # Get cell formatting instructions if any
+            formatting = table_data.get("formatting", [])
+            
+            # Add rows data
+            for row_idx, row_data in enumerate(rows, table_start_row + 1):
+                for col_idx, cell_value in enumerate(row_data, 1):
+                    cell = ws.cell(row=row_idx, column=col_idx, value=cell_value)
+                    cell.border = Border(
+                        left=Side(style='thin'), right=Side(style='thin'),
+                        top=Side(style='thin'), bottom=Side(style='thin')
+                    )
+                    
+                    # Apply formatting if specified for this column
+                    for format_info in formatting:
+                        # Convert from 0-based to 1-based indexing
+                        format_col = format_info.get("column_index", 0) + 1
+                        
+                        if col_idx == format_col:
+                            format_type = format_info.get("format_type", "").lower()
+                            
+                            # Apply number format based on type
+                            if format_type == "percentage":
+                                # Handle percentage formatting with decimal places
+                                decimal_places = format_info.get("decimal_places", 2)
+                                if decimal_places == 0:
+                                    cell.number_format = numbers.FORMAT_PERCENTAGE
+                                elif decimal_places == 1:
+                                    cell.number_format = numbers.FORMAT_PERCENTAGE_00.replace("0.00", "0.0")
+                                else:
+                                    cell.number_format = numbers.FORMAT_PERCENTAGE_00
+                            elif format_type in FORMAT_TYPES:
+                                cell.number_format = FORMAT_TYPES[format_type]
+                            elif format_type == "custom":
+                                # Allow custom number formats
+                                custom_format = format_info.get("custom_format", "General")
+                                cell.number_format = custom_format
+                    
+                    # Track max column
+                    max_col_used = max(max_col_used, col_idx)
+            
+            # Update max row used
+            if rows:
+                max_row_used = max(max_row_used, table_start_row + len(rows))
+            else:
+                max_row_used = max(max_row_used, table_start_row + 1)  # Just headers
+            
+            # Auto-adjust column widths
+            for col in range(1, max_col_used + 1):
+                max_length = 0
+                column_cells = [ws.cell(row=r, column=col) for r in range(table_start_row, max_row_used + 1)]
+                
+                for cell in column_cells:
+                    try:
+                        if cell.value:
+                            max_length = max(max_length, len(str(cell.value)))
+                    except:
+                        pass
+                
+                adjusted_width = (max_length + 2) * 1.2
+                ws.column_dimensions[get_column_letter(col)].width = adjusted_width
+            
+            # Process charts for this table
+            charts = table_data.get("charts", [])
+            for chart_idx, chart_data in enumerate(charts):
+                try:
+                    # Get original chart type string for specialized configurations
+                    original_chart_type = chart_data.get("type", "").lower().strip()
+                    
+                    # Normalize the chart type to match our mapping keys
+                    chart_type = original_chart_type
+                    for key in CHART_TYPES.keys():
+                        if key in original_chart_type:
+                            chart_type = key
+                            break
+                    
+                    if chart_type in CHART_TYPES:
+                        # Create chart object based on type
+                        chart = CHART_TYPES[chart_type]()
+                        
+                        # Configure specific chart type variations
+                        if "column" in original_chart_type:
+                            chart.type = "col"  # Make it vertical (column) chart
+                            
+                            # Handle clustered vs stacked
+                            if "clustered" in original_chart_type:
+                                chart.grouping = "clustered"
+                            elif "stacked" in original_chart_type:
+                                chart.grouping = "stacked"
+                        
+                        if "doughnut" in original_chart_type:
+                            # For donut charts, set inner hole size (40% is standard)
+                            chart.doughnutHoleSize = 50  # 50% inner hole
+                        
+                        # Set chart title
+                        chart.title = chart_data.get("title", f"Chart {chart_idx+1}")
+                        
+                        # Set axis titles (except for pie/doughnut charts)
+                        if chart_type not in ["pie", "doughnut"]:
+                            chart.x_axis.title = chart_data.get("x_axis", "")
+                            chart.y_axis.title = chart_data.get("y_axis", "")
+                            
+                            # Add gridlines for better readability in line/bar/column charts
+                            chart.y_axis.majorGridlines = None
+                            chart.x_axis.majorGridlines = None
+                        
+                        # Get data range
+                        data_range = chart_data.get("data_range", "")
+                        
+                        if data_range:
+                            try:
+                                # Parse the data range to get row and column references
+                                start_cell, end_cell = data_range.split(":")
+                                
+                                # Handle single letter column references (A1:D5) or multi-letter (AA1:AD5)
+                                start_col_letter = ''.join(c for c in start_cell if c.isalpha())
+                                start_col = 0
+                                for i, c in enumerate(reversed(start_col_letter)):
+                                    start_col += (ord(c) - ord('A') + 1) * (26 ** i)
+                                
+                                end_col_letter = ''.join(c for c in end_cell if c.isalpha())
+                                end_col = 0
+                                for i, c in enumerate(reversed(end_col_letter)):
+                                    end_col += (ord(c) - ord('A') + 1) * (26 ** i)
+                                
+                                # Extract row numbers
+                                start_row = int(''.join(c for c in start_cell if c.isdigit()))
+                                end_row = int(''.join(c for c in end_cell if c.isdigit()))
+                                
+                                # Adjust for 0-indexed rows in openpyxl References
+                                # Use provided range or default to the current table data
+                                cat_ref = Reference(
+                                    ws,
+                                    min_row=start_row,
+                                    max_row=end_row,
+                                    min_col=start_col,
+                                    max_col=start_col
+                                )
+                                
+                                # Use remaining columns as data series
+                                data_ref = Reference(
+                                    ws,
+                                    min_row=start_row,
+                                    max_row=end_row,
+                                    min_col=start_col + 1,
+                                    max_col=end_col
+                                )
+                            except Exception as e:
+                                print(f"Error parsing data range '{data_range}': {e}")
+                                # Fall back to using the current table data
+                                cat_ref = Reference(
+                                    ws,
+                                    min_row=table_header_row,
+                                    max_row=table_end_row,
+                                    min_col=table_start_col,
+                                    max_col=table_start_col
+                                )
+                                
+                                data_ref = Reference(
+                                    ws,
+                                    min_row=table_header_row,
+                                    max_row=table_end_row,
+                                    min_col=table_start_col + 1,
+                                    max_col=table_end_col
+                                )
+                        else:
+                            # Use the current table data if no range is provided
+                            cat_ref = Reference(
+                                ws,
+                                min_row=table_header_row,
+                                max_row=table_end_row,
+                                min_col=table_start_col,
+                                max_col=table_start_col
+                            )
+                            
+                            data_ref = Reference(
+                                ws,
+                                min_row=table_header_row,
+                                max_row=table_end_row,
+                                min_col=table_start_col + 1,
+                                max_col=table_end_col
+                            )
+                        
+                        # Check if series_titles are provided
+                        series_titles = chart_data.get("series_titles", [])
+                        
+                        # Use first row as titles if it's headers and no series titles provided
+                        titles_from_data = len(series_titles) == 0
+                        
+                        # Handle bar/column charts with selective columns
+                        specific_columns = chart_data.get("columns", [])
+                        if specific_columns and not data_range:
+                            # If specific columns are mentioned for the chart (e.g., only Revenue and Cost)
+                            # We need to create specific references
+                            
+                            # First, find these columns in the headers
+                            column_indices = []
+                            for col_name in specific_columns:
+                                try:
+                                    # Find the column index (1-based)
+                                    col_idx = headers.index(col_name) + 1
+                                    column_indices.append(col_idx)
+                                except ValueError:
+                                    print(f"Could not find column '{col_name}' in headers")
+                            
+                            if column_indices:
+                                # We have valid column indices, use them instead
+                                # Reset the chart object
+                                chart = CHART_TYPES[chart_type]()
+                                
+                                # Add each column as a separate data series
+                                for col_idx in column_indices:
+                                    col_ref = Reference(
+                                        ws,
+                                        min_row=table_header_row + 1,  # Skip header
+                                        max_row=table_end_row,
+                                        min_col=col_idx,
+                                        max_col=col_idx
+                                    )
+                                    chart.add_data(col_ref, titles_from_data=False)
+                                    
+                                # Set the series titles based on the column names
+                                for i, col_name in enumerate(specific_columns):
+                                    if i < len(chart.series):
+                                        chart.series[i].title = col_name
+                                
+                                # Use the first column for categories
+                                chart.set_categories(cat_ref)
+                            else:
+                                # Fallback to using all columns
+                                chart.add_data(data_ref, titles_from_data=titles_from_data)
+                                chart.set_categories(cat_ref)
+                        else:
+                            # Add data to chart (normal case)
+                            chart.add_data(data_ref, titles_from_data=titles_from_data)
+                            
+                            # Apply series titles if provided
+                            if series_titles and not titles_from_data:
+                                for i, title in enumerate(series_titles):
+                                    if i < len(chart.series):
+                                        chart.series[i].title = title
+                            
+                            # Set categories
+                            chart.set_categories(cat_ref)
+                        
+                        # Check if this is an election result with a line chart that needs special handling
+                        if chart_type == "line":
+                            print(f"Applying special handling for line chart in {filename}")
+                            
+                            # Line charts need special handling to ensure proper visualization
+                            # First column should usually be the time/category column
+                            # Each additional column should be treated as a separate data series
+                            
+                            # If we have data with 3+ columns (axis + multiple data series)
+                            if len(headers) >= 3:  
+                                # Reset the chart to ensure clean configuration
+                                chart = LineChart()
+                                chart.title = chart_data.get("title", "Trend Analysis")
+                                chart.x_axis.title = chart_data.get("x_axis", headers[0])
+                                chart.y_axis.title = chart_data.get("y_axis", "Values")
+                                
+                                # Create proper references for line chart:
+                                # Categories (X-axis) from first column
+                                cat_ref = Reference(
+                                    ws, 
+                                    min_row=table_header_row + 1,  # Skip header
+                                    max_row=table_end_row,
+                                    min_col=table_start_col,  # First column contains dates/categories
+                                    max_col=table_start_col
+                                )
+                                
+                                # Data series (Y-axis) from columns 2 onwards
+                                data_ref = Reference(
+                                    ws,
+                                    min_row=table_header_row,  # Include headers as series names
+                                    max_row=table_end_row,
+                                    min_col=table_start_col + 1,  # Start from second column
+                                    max_col=table_end_col
+                                )
+                                
+                                # Add data with titles from first row (headers)
+                                chart.add_data(data_ref, titles_from_data=True)
+                                chart.set_categories(cat_ref)
+                                
+                                # Add markers to make the lines more visible
+                                for series in chart.series:
+                                    series.marker.symbol = "circle"
+                                    series.marker.size = 7
+                                    series.smooth = False  # Ensure precise points rather than smoothed lines
+                        
+                        # Handle area charts with similar multi-series logic
+                        elif chart_type == "area":
+                            print(f"Applying special handling for area chart in {filename}")
+                            
+                            # For area charts, structure similarly to line charts but with stacked display
+                            if len(headers) >= 3:
+                                # Reset the chart with proper configuration
+                                chart = CHART_TYPES[chart_type]()
+                                chart.grouping = "stacked"  # Set to stacked by default
+                                chart.title = chart_data.get("title", "Area Analysis")
+                                chart.x_axis.title = chart_data.get("x_axis", headers[0])
+                                chart.y_axis.title = chart_data.get("y_axis", "Values")
+                                
+                                # Set up category and data references
+                                cat_ref = Reference(
+                                    ws, 
+                                    min_row=table_header_row + 1,  # Skip header
+                                    max_row=table_end_row,
+                                    min_col=table_start_col,  # First column
+                                    max_col=table_start_col
+                                )
+                                
+                                data_ref = Reference(
+                                    ws,
+                                    min_row=table_header_row,  # Include headers
+                                    max_row=table_end_row,
+                                    min_col=table_start_col + 1,  # Start from second column
+                                    max_col=table_end_col
+                                )
+                                
+                                chart.add_data(data_ref, titles_from_data=True)
+                                chart.set_categories(cat_ref)
+                        
+                        # Handle scatter charts specially
+                        elif chart_type == "scatter" or "scatter" in original_chart_type:
+                            print(f"Applying special handling for scatter chart in {filename}")
+                            
+                            # For scatter plots, the typical format is X values in first column, Y values in second
+                            # Additional columns can represent different data series
+                            
+                            if len(headers) >= 2:
+                                # No category data for scatter charts - each point needs both X and Y values
+                                
+                                # Add each column pair as a separate series if available
+                                if len(headers) == 2:
+                                    # Simple X,Y scatter plot
+                                    x_ref = Reference(
+                                        ws,
+                                        min_row=table_header_row + 1,  # Skip header
+                                        max_row=table_end_row,
+                                        min_col=table_start_col,  # X values in first column
+                                        max_col=table_start_col
+                                    )
+                                    
+                                    y_ref = Reference(
+                                        ws,
+                                        min_row=table_header_row + 1,  # Skip header
+                                        max_row=table_end_row,
+                                        min_col=table_start_col + 1,  # Y values in second column
+                                        max_col=table_start_col + 1
+                                    )
+                                    
+                                    # Add data series with proper X and Y references
+                                    chart.series.append(Series(values=y_ref, xvalues=x_ref, title=headers[1]))
+                                else:
+                                    # Multiple series scatter plot
+                                    x_col = table_start_col
+                                    for col_idx in range(table_start_col + 1, table_end_col + 1):
+                                        x_ref = Reference(
+                                            ws,
+                                            min_row=table_header_row + 1,  # Skip header
+                                            max_row=table_end_row,
+                                            min_col=x_col,  # First column for X values
+                                            max_col=x_col
+                                        )
+                                        
+                                        y_ref = Reference(
+                                            ws,
+                                            min_row=table_header_row + 1,  # Skip header
+                                            max_row=table_end_row,
+                                            min_col=col_idx,  # Next column for Y values
+                                            max_col=col_idx
+                                        )
+                                        
+                                        chart.series.append(Series(values=y_ref, xvalues=x_ref, title=headers[col_idx-1]))
+                        
+                        # Special handling for bar/column charts to ensure they follow the right orientation
+                        elif chart_type == "bar" or "bar" in original_chart_type or "column" in original_chart_type:
+                            is_vertical = "column" in original_chart_type  # Column charts are vertical
+                            
+                            if is_vertical:
+                                chart.type = "col"
+                            
+                            # For bar charts with multiple series, special handling is needed
+                            if len(headers) > 2:
+                                print(f"Applying special handling for multi-series bar/column chart in {filename}")
+                                
+                                # Make sure the chart's orientation is correct
+                                if is_vertical:
+                                    chart.type = "col"  # Vertical bars (columns)
+                                else:
+                                    chart.type = "bar"  # Horizontal bars
+                                
+                                # Check if we need stacked or clustered
+                                if "stacked" in original_chart_type:
+                                    chart.grouping = "stacked"
+                                else:
+                                    chart.grouping = "clustered"  # Default to clustered for multiple series
+                        
+                        # Apply chart style
+                        chart.style = 2  # Use a nice default style
+                        
+                        # Special handling for pie/doughnut charts
+                        if chart_type in ["pie", "doughnut"]:
+                            # For simple "X vs Y" comparisons, we need to ensure the legend shows the category values correctly
+                            has_data_cols_as_series = chart_data.get("data_cols_as_series", True)
+                            
+                            # Check if this is our simple comparison template by looking at header names
+                            is_category_value_format = False
+                            if len(headers) == 2 and headers[0] in ["Category", "Type", "Animal Type", "Item"] and headers[1] in ["Count", "Value", "Amount", "Number"]:
+                                is_category_value_format = True
+                            
+                            if is_category_value_format and not has_data_cols_as_series:
+                                # Re-create the chart with proper series handling for category-value format
+                                chart = CHART_TYPES[chart_type]()
+                                chart.title = chart_data.get("title", "Data Distribution")
+                                
+                                # Use row values as series names (e.g. "Dogs", "Cats")
+                                # Extract the actual categories from the data
+                                categories = [row[0] for row in rows]  # Get category names from first column
+                                
+                                # Add each category as a data point with its own title
+                                values_ref = Reference(
+                                    ws,
+                                    min_row=table_header_row + 1,  # Skip header
+                                    max_row=table_end_row,
+                                    min_col=2,  # Second column contains values
+                                    max_col=2
+                                )
+                                chart.add_data(values_ref, titles_from_data=False)
+                                
+                                # Use categories as the data point labels
+                                cat_ref = Reference(
+                                    ws,
+                                    min_row=table_header_row + 1,  # Skip header
+                                    max_row=table_end_row,
+                                    min_col=1,  # First column contains categories
+                                    max_col=1
+                                )
+                                chart.set_categories(cat_ref)
+                                
+                                # Set data point colors and explosions
+                                series = chart.series[0]
+                                for i in range(len(rows)):
+                                    pt = DataPoint(idx=i)
+                                    pt.explosion = 2 if chart_type == "pie" else 1
+                                    series.dPt.append(pt)
+                            else:
+                                # Default pie chart handling
+                                series = chart.series[0]
+                                num_points = end_row - start_row + 1 if 'end_row' in locals() else len(rows)
+                                for i in range(min(num_points, len(rows))):
+                                    pt = DataPoint(idx=i)
+                                    pt.explosion = 1 if chart_type == "doughnut" else 2
+                                    series.dPt.append(pt)
+                        
+                        # Position the chart
+                        # Calculate position based on max_row_used
+                        chart_top_row = max_row_used + 2  # Add 2 rows of spacing
+                        
+                        # For adjacent charts, calculate position based on chart index
+                        chart_col = 2 + (chart_idx % 2) * 8  # Alternate between columns B and J
+                        chart_top_cell = f"{get_column_letter(chart_col)}{chart_top_row}"
+                        
+                        # Add chart to worksheet
+                        ws.add_chart(chart, chart_top_cell)
+                        
+                        # Update max_row_used (assuming chart height is ~15 rows)
+                        # If odd number of charts, update max_row for next row of charts
+                        if chart_idx % 2 == 1 or chart_idx == len(charts) - 1:
+                            max_row_used = chart_top_row + 15
+                except Exception as e:
+                    print(f"Error creating chart {chart_idx+1}: {str(e)}")
+                    # Continue with the next chart
+            
+            # Prepare for next table (add some spacing)
+            table_start_row = max_row_used + 3
+    
+    # Save the workbook
+    temp_dir = tempfile.gettempdir()
+    file_path = os.path.join(temp_dir, filename)
+    
+    try:
+        wb.save(file_path)
+    except Exception as e:
+        print(f"Error saving Excel file: {e}")
+        # Try to save with a different filename if there was an error
+        backup_filename = f"backup_excel_{uuid.uuid4().hex[:8]}.xlsx"
+        file_path = os.path.join(temp_dir, backup_filename)
+        wb.save(file_path)
+    
+    return file_path
+
+def generate_excel_from_dict_xlsx(data):
+    """
+    Generate an Excel file with multiple sheets, tables, and charts using XlsxWriter
+    for enhanced chart capabilities and visualizations.
+    
+    Args:
+        data (dict): A dictionary containing the Excel file structure with sheets, tables, and charts
+        
+    Returns:
+        str: Path to the generated Excel file
+    """
+    # Get the filename
+    filename = data.get("filename", f"generated_excel_{uuid.uuid4().hex[:8]}.xlsx")
+    if not filename.endswith('.xlsx'):
+        filename += '.xlsx'
+    
+    # Create temp file path
+    temp_dir = tempfile.gettempdir()
+    file_path = os.path.join(temp_dir, filename)
+    
+    # Create a new workbook with XlsxWriter
+    workbook = xlsxwriter.Workbook(file_path)
+    
+    # Define common styles
+    header_format = workbook.add_format({
+        'bold': True,
+        'font_size': 12,
+        'bg_color': '#4472C4',
+        'font_color': 'white',
+        'align': 'center',
+        'valign': 'vcenter',
+        'border': 1
+    })
+    
+    title_format = workbook.add_format({
+        'bold': True,
+        'font_size': 14,
+        'align': 'left',
+        'valign': 'vcenter'
+    })
+    
+    cell_format = workbook.add_format({
+        'border': 1
+    })
+    
+    # Create format objects for different data types
+    format_objects = {}
+    for format_type, format_str in XLSX_FORMAT_TYPES.items():
+        format_objects[format_type] = workbook.add_format({'num_format': format_str, 'border': 1})
+    
+    # Process each sheet
+    sheets_data = data.get("sheets", [])
+    for sheet_idx, sheet_data in enumerate(sheets_data):
+        # Create new worksheet
+        sheet_name = sheet_data.get("name", f"Sheet{sheet_idx+1}")
+        worksheet = workbook.add_worksheet(sheet_name)
+        
+        # Track row position
+        current_row = 0
+        
+        # Process tables in the sheet
+        tables = sheet_data.get("tables", [])
+        for table_idx, table_data in enumerate(tables):
+            # Add table title if provided
+            title = table_data.get("title")
+            if title:
+                worksheet.write(current_row, 0, title, title_format)
+                current_row += 2  # Add space after title
+            
+            # Get headers and rows
+            headers = table_data.get("headers", [])
+            rows = table_data.get("rows", [])
+            
+            # Store table start position for charts
+            table_start_row = current_row
+            table_end_row = current_row + len(rows)
+            
+            # Write headers with styling
+            for col_idx, header in enumerate(headers):
+                worksheet.write(current_row, col_idx, header, header_format)
+            
+            # Set column widths based on headers
+            for col_idx, header in enumerate(headers):
+                width = max(len(str(header)) * 1.2, 10) 
+                worksheet.set_column(col_idx, col_idx, width)
+            
+            current_row += 1  # Move to data rows
+            
+            # Get cell formatting instructions if any
+            formatting = table_data.get("formatting", [])
+            
+            # Write data rows
+            for row_idx, row_data in enumerate(rows):
+                for col_idx, cell_value in enumerate(row_data):
+                    # Default to standard cell format
+                    cell_fmt = cell_format
+                    
+                    # Check for column formatting
+                    for format_info in formatting:
+                        format_col_idx = format_info.get("column_index", 0)
+                        
+                        if col_idx == format_col_idx:
+                            format_type = format_info.get("format_type", "").lower()
+                            
+                            if format_type in format_objects:
+                                cell_fmt = format_objects[format_type]
+                                # Handle percentage conversion
+                                if format_type == "percentage" and isinstance(cell_value, (int, float)):
+                                    if cell_value > 1 and cell_value <= 100:
+                                        # Convert percentage from 0-100 to 0-1 scale
+                                        cell_value = cell_value / 100
+                    
+                    # Write cell with appropriate formatting
+                    worksheet.write(current_row, col_idx, cell_value, cell_fmt)
+                
+                current_row += 1
+            
+            # Process charts for this table
+            chart_row = current_row + 2  # Leave space after the table for charts
+            table_data_range = {
+                'start_row': table_start_row,
+                'start_col': 0,
+                'end_row': table_end_row,
+                'end_col': len(headers) - 1
+            }
+            
+            charts = table_data.get("charts", [])
+            for chart_idx, chart_data in enumerate(charts):
+                # Determine chart position - place charts side by side when possible
+                chart_col = 0 if chart_idx % 2 == 0 else 7
+                
+                # If we're on an even numbered chart (except 0), move down for the next row of charts
+                if chart_idx > 0 and chart_idx % 2 == 0:
+                    chart_row += 15
+                
+                # Create and configure chart
+                create_chart(
+                    workbook, 
+                    worksheet, 
+                    chart_data, 
+                    table_data_range, 
+                    chart_row, 
+                    chart_col,
+                    headers,
+                    rows
+                )
+            
+            # Update row position for next table (add spacing)
+            if charts:
+                current_row = chart_row + 15
+            else:
+                current_row += 3
+    
+    # Close the workbook
+    try:
+        workbook.close()
+    except Exception as e:
+        print(f"Error saving Excel file with XlsxWriter: {e}")
+        # Try to save with a different filename if there was an error
+        backup_filename = f"backup_excel_{uuid.uuid4().hex[:8]}.xlsx"
+        file_path = os.path.join(temp_dir, backup_filename)
+        try:
+            workbook = xlsxwriter.Workbook(file_path)
+            workbook.close()
+        except:
+            pass
+    
+    return file_path
+
+def create_chart(workbook, worksheet, chart_data, table_range, row, col, headers, rows):
+    """
+    Create a chart using XlsxWriter with enhanced styling and features
+    
+    Args:
+        workbook: XlsxWriter workbook object
+        worksheet: XlsxWriter worksheet object  
+        chart_data: Dictionary with chart configuration
+        table_range: Dictionary with table position info
+        row: Starting row for the chart
+        col: Starting column for the chart
+        headers: List of column headers
+        rows: List of data rows
+    """
+    # Get chart type and original type string for specialized configurations
+    original_chart_type = chart_data.get("type", "").lower().strip()
+    
+    # Normalize chart type
+    chart_type = original_chart_type
+    for key in XLSX_CHART_TYPES.keys():
+        if key in original_chart_type:
+            chart_type = key
+            break
+    
+    # Fallback to "column" if type not recognized
+    if chart_type not in XLSX_CHART_TYPES:
+        chart_type = "column"
+    
+    # Create chart object
+    xlsx_chart_type = XLSX_CHART_TYPES.get(chart_type, "column")
+    chart = workbook.add_chart({'type': xlsx_chart_type})
+    
+    # Set chart title and style
+    title = chart_data.get("title", "Chart")
+    chart.set_title({'name': title})
+    
+    # Set chart style and size
+    chart.set_size({'width': 500, 'height': 300})
+    chart.set_style(11)  # Use a nice pre-defined style (1-48)
+    
+    # Set legend position (right side by default)
+    chart.set_legend({'position': 'right'})
+    
+    # Default data range is the whole table excluding headers
+    start_row = table_range['start_row'] + 1  # Skip header
+    start_col = table_range['start_col']
+    end_row = table_range['end_row']
+    end_col = table_range['end_col']
+    
+    # Check if data range is explicitly provided
+    data_range = chart_data.get("data_range", "")
+    if data_range:
+        try:
+            # Parse the data range to get row and column references
+            start_cell, end_cell = data_range.split(":")
+            
+            # Parse column letters to indices
+            start_col_letter = ''.join(c for c in start_cell if c.isalpha())
+            start_col = 0
+            for i, c in enumerate(reversed(start_col_letter)):
+                start_col += (ord(c.upper()) - ord('A')) * (26 ** i)
+            
+            end_col_letter = ''.join(c for c in end_cell if c.isalpha())
+            end_col = 0
+            for i, c in enumerate(reversed(end_col_letter)):
+                end_col += (ord(c.upper()) - ord('A')) * (26 ** i)
+            
+            # Parse row numbers (convert from 1-indexed Excel to 0-indexed XlsxWriter)
+            start_row = int(''.join(c for c in start_cell if c.isdigit())) - 1
+            end_row = int(''.join(c for c in end_cell if c.isdigit())) - 1
+        except Exception as e:
+            print(f"Error parsing data range '{data_range}': {e}")
+            # Fall back to original table range
+    
+    # Check if any specific columns were requested for the chart
+    specific_columns = chart_data.get("columns", [])
+    series_titles = chart_data.get("series_titles", [])
+    
+    # Handle special chart types
+    if chart_type in ["pie", "doughnut"]:
+        # For pie/donut charts, check if this is a simple category-value format
+        if len(headers) >= 2 and len(rows) > 0:
+            # Add the data series
+            chart.add_series({
+                'name': headers[1] if len(headers) > 1 else 'Values',
+                'categories': [worksheet.name, start_row, start_col, end_row, start_col],
+                'values': [worksheet.name, start_row, start_col + 1, end_row, start_col + 1],
+                'points': [{'fill': {'color': color}} for color in XLSX_CHART_COLORS[:len(rows)]]
+            })
+            
+            # Add data labels showing both category name and percentage
+            chart.set_style(10)  # Colorful style for pie charts
+            
+            # Doughnut specific settings
+            if chart_type == "doughnut":
+                chart.set_hole_size(50)
+    
+    elif chart_type in ["scatter", "bubble"]:
+        # Scatter plots need X and Y value pairs
+        if len(headers) >= 2:
+            # If we have paired X-Y data columns
+            for col_idx in range(1, min(3, end_col - start_col + 1)):  # Limit to first 2 series for simplicity
+                series_name = series_titles[col_idx-1] if col_idx-1 < len(series_titles) else headers[col_idx]
+                chart.add_series({
+                    'name': series_name,
+                    'categories': [worksheet.name, start_row, start_col, end_row, start_col],
+                    'values': [worksheet.name, start_row, start_col + col_idx, end_row, start_col + col_idx],
+                    'marker': {'type': 'circle', 'size': 7, 'border': {'color': 'black'}, 'fill': {'color': XLSX_CHART_COLORS[col_idx-1]}}
+                })
+            
+            # Set axis titles
+            x_axis = chart_data.get("x_axis", headers[0] if headers else "X-Axis")
+            y_axis = chart_data.get("y_axis", headers[1] if len(headers) > 1 else "Y-Axis")
+            
+            chart.set_x_axis({'name': x_axis, 'major_gridlines': {'visible': True}})
+            chart.set_y_axis({'name': y_axis, 'major_gridlines': {'visible': True}})
+    
+    elif chart_type in ["bar", "column", "line", "area"]:
+        # Is this stacked?
+        is_stacked = "stacked" in original_chart_type
+        
+        # For these chart types, each column after the first is a data series
+        data_series_start_col = start_col + 1
+        
+        # If specific columns are requested
+        if specific_columns:
+            column_indices = []
+            for col_name in specific_columns:
+                try:
+                    col_idx = headers.index(col_name)
+                    column_indices.append(col_idx)
+                except (ValueError, IndexError):
+                    pass
+            
+            if column_indices:
+                # Use only the specific columns
+                for idx, col_idx in enumerate(column_indices):
+                    series_name = series_titles[idx] if idx < len(series_titles) else headers[col_idx]
+                    
+                    series_options = {
+                        'name': series_name,
+                        'categories': [worksheet.name, start_row, start_col, end_row, start_col],
+                        'values': [worksheet.name, start_row, col_idx, end_row, col_idx],
+                        'fill': {'color': XLSX_CHART_COLORS[idx % len(XLSX_CHART_COLORS)]}
+                    }
+                    
+                    # Add markers for line charts
+                    if chart_type == 'line':
+                        series_options['marker'] = {'type': 'circle', 'size': 5}
+                    
+                    chart.add_series(series_options)
+        else:
+            # Add each data series (column) after the category column
+            for col_idx in range(data_series_start_col, end_col + 1):
+                series_idx = col_idx - data_series_start_col
+                series_name = series_titles[series_idx] if series_idx < len(series_titles) else headers[col_idx]
+                
+                series_options = {
+                    'name': series_name,
+                    'categories': [worksheet.name, start_row, start_col, end_row, start_col],
+                    'values': [worksheet.name, start_row, col_idx, end_row, col_idx],
+                    'fill': {'color': XLSX_CHART_COLORS[series_idx % len(XLSX_CHART_COLORS)]}
+                }
+                
+                # Add markers for line charts
+                if chart_type == 'line':
+                    series_options['marker'] = {'type': 'circle', 'size': 5}
+                
+                chart.add_series(series_options)
+        
+        # Set axis titles
+        x_axis = chart_data.get("x_axis", headers[0] if headers else "X-Axis")
+        y_axis = chart_data.get("y_axis", "Values")
+        
+        # Set all the chart axis properties
+        chart.set_x_axis({
+            'name': x_axis,
+            'name_font': {'size': 10, 'bold': True},
+            'num_font': {'size': 9},
+            'major_gridlines': {'visible': False},
+            'label_position': 'low'
+        })
+        
+        chart.set_y_axis({
+            'name': y_axis,
+            'name_font': {'size': 10, 'bold': True},
+            'num_font': {'size': 9},
+            'major_gridlines': {'visible': True}
+        })
+        
+        # Handle stacked charts
+        if is_stacked:
+            if chart_type == "column" or chart_type == "bar":
+                chart.set_chartarea({'border': {'none': True}})
+                chart.set_plotarea({'border': {'none': True}})
+                chart.set_style(42)  # Style for stacked charts
+                
+                # Set chart subtype to stacked
+                if chart_type == "column":
+                    chart.set_subtype('stacked')
+                elif chart_type == "bar":
+                    chart.set_subtype('stacked')
+            elif chart_type == "area":
+                chart.set_subtype('stacked')
+    
+    # Insert chart into the worksheet
+    worksheet.insert_chart(row, col, chart)

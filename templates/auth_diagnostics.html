@@ -1,0 +1,726 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Firebase Authentication Diagnostics</title>
+    
+    <!-- Firebase Configuration -->
+    <meta name="firebase-api-key" content="{{ firebase_api_key if firebase_api_key is defined else g.firebase_api_key }}">
+    <meta name="firebase-auth-domain" content="{{ firebase_auth_domain if firebase_auth_domain is defined else g.firebase_auth_domain }}">
+    <meta name="firebase-project-id" content="{{ firebase_project_id if firebase_project_id is defined else g.firebase_project_id }}">
+    <meta name="firebase-storage-bucket" content="{{ firebase_storage_bucket if firebase_storage_bucket is defined else g.firebase_storage_bucket }}">
+    <meta name="firebase-messaging-sender-id" content="{{ firebase_messaging_sender_id if firebase_messaging_sender_id is defined else g.firebase_messaging_sender_id }}">
+    <meta name="firebase-app-id" content="{{ firebase_app_id if firebase_app_id is defined else g.firebase_app_id }}">
+      <!-- Firebase App (the core Firebase SDK) -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-app-compat.js"></script>
+    <!-- Add Firebase Auth -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-auth-compat.js"></script>
+    
+    <!-- Force Logout Script - runs early to handle explicit logout states -->
+    <script src="/static/js/force-logout.js"></script>
+    
+    <!-- Enhanced Firebase logout handling -->
+    <script src="/static/js/enhanced-logout.js"></script>
+    
+    <!-- Firebase Auth Reset - Monitors for auth state issues -->
+    <script src="/static/js/firebase-auth-reset.js"></script>
+      <!-- Firebase Auth Watchdog - Continuous monitoring of auth state -->
+    <script src="/static/js/force-logout-cleanup.js"></script>
+    <script src="/static/js/firebase-auth-watchdog.js"></script>
+    
+    <style>
+        body {
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            padding: 2rem;
+            line-height: 1.6;
+        }
+        
+        h1 {
+            color: #3a7bd5;
+            margin-bottom: 1.5rem;
+        }
+        
+        h2 {
+            color: #6ebce3;
+            margin-top: 2rem;
+            margin-bottom: 1rem;
+            border-bottom: 1px solid #333;
+            padding-bottom: 0.5rem;
+        }
+        
+        .container {
+            max-width: 900px;
+            margin: 0 auto;
+            background-color: #1e1e1e;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+        }
+        
+        .card {
+            background-color: #252525;
+            border-radius: 8px;
+            padding: 1.5rem;
+            margin-bottom: 1.5rem;
+        }
+        
+        code {
+            background-color: #333;
+            padding: 0.2rem 0.4rem;
+            border-radius: 3px;
+            font-family: 'Menlo', 'Consolas', monospace;
+        }
+        
+        pre {
+            background-color: #252525;
+            padding: 1rem;
+            border-radius: 5px;
+            overflow-x: auto;
+            white-space: pre-wrap;
+            font-family: 'Menlo', 'Consolas', monospace;
+        }
+        
+        .status {
+            display: inline-block;
+            padding: 0.3rem 0.6rem;
+            border-radius: 3px;
+            font-weight: bold;
+        }
+        
+        .status-success {
+            background-color: #28a745;
+            color: white;
+        }
+        
+        .status-warning {
+            background-color: #ffc107;
+            color: black;
+        }
+        
+        .status-danger {
+            background-color: #dc3545;
+            color: white;
+        }
+        
+        table {
+            width: 100%;
+            border-collapse: collapse;
+            margin: 1rem 0;
+        }
+        
+        th, td {
+            text-align: left;
+            padding: 0.5rem;
+            border-bottom: 1px solid #333;
+        }
+        
+        th {
+            background-color: #2c3e50;
+        }
+        
+        tr:nth-child(even) {
+            background-color: #292929;
+        }
+        
+        .btn {
+            display: inline-block;
+            padding: 0.5rem 1rem;
+            background-color: #3a7bd5;
+            color: white;
+            text-decoration: none;
+            border-radius: 4px;
+            border: none;
+            cursor: pointer;
+            font-size: 1rem;
+            margin-right: 0.5rem;
+            margin-bottom: 0.5rem;
+        }
+        
+        .btn:hover {
+            background-color: #2c5fa6;
+        }
+        
+        .btn-danger {
+            background-color: #dc3545;
+        }
+        
+        .btn-danger:hover {
+            background-color: #c82333;
+        }
+        
+        .console-output {
+            background-color: #1a1a1a;
+            padding: 1rem;
+            border-radius: 5px;
+            margin-top: 1rem;
+            max-height: 400px;
+            overflow-y: auto;
+            font-family: 'Menlo', 'Consolas', monospace;
+            white-space: pre-wrap;
+        }
+    </style>
+</head>
+<body>    <div class="container">
+        <h1>Firebase Authentication Diagnostics</h1>
+        
+        <div class="card">
+            <h2>Diagnostic Actions</h2>
+            <button id="run-complete-logout" class="btn">Run Complete Logout</button>
+            <button id="manual-signout" class="btn">Firebase Sign Out</button>
+            <button id="clear-storage" class="btn">Clear Auth Storage</button>
+            <button id="delete-indexed-db" class="btn">Delete IndexedDB</button>
+            <button id="set-logout-flag" class="btn">Set Logout Flag</button>
+            <button id="clear-logout-flag" class="btn">Clear Logout Flag</button>
+            <a href="/logout" class="btn">Standard Logout</a>
+            <a href="/logout_cleanup" class="btn">Enhanced Logout</a>
+        </div>
+        
+        <div class="card">
+            <h2>Authentication Status</h2>
+            <p>
+                <strong>Firebase Auth Status:</strong> <span id="firebase-auth-status">Checking...</span>
+            </p>
+            <p>
+                <strong>Explicit Logout Flag:</strong> <span id="logout-flag-status">Checking...</span>
+            </p>
+            <p>
+                <strong>Server Time:</strong> {{ current_time | timestamp_to_date }}
+            </p>
+            <p>
+                <strong>Logged In (Server Session):</strong>
+                {% if is_logged_in %}
+                <span class="status status-success">Yes</span>
+                {% else %}
+                <span class="status status-warning">No</span>
+                {% endif %}
+            </p>
+            
+            <h3>Session Data</h3>
+            <table>
+                <thead>
+                    <tr>
+                        <th>Key</th>
+                        <th>Value</th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for key, value in session_data.items() %}
+                    <tr>
+                        <td>{{ key }}</td>
+                        <td>{{ value }}</td>
+                    </tr>
+                    {% endfor %}
+                    {% if not session_data %}
+                    <tr>
+                        <td colspan="2">No session data found</td>
+                    </tr>
+                    {% endif %}
+                </tbody>
+            </table>
+        </div>
+        
+        <div class="card">
+            <h2>Firebase Authentication State</h2>
+            <div id="firebase-status">Loading Firebase status...</div>
+            
+            <div class="console-output" id="firebase-debug">
+                Running diagnostics...
+            </div>
+            
+            <div style="margin-top: 1rem;">
+                <button id="run-diagnostics" class="btn">Run Diagnostics</button>
+                <button id="force-logout" class="btn btn-danger">Force Logout</button>
+                <button id="clear-storage" class="btn btn-danger">Clear All Auth Storage</button>
+            </div>
+        </div>
+        
+        <div class="card">
+            <h2>Actions</h2>
+            <div>
+                <a href="/logout" class="btn">Logout Page</a>
+                <a href="/" class="btn">Home Page</a>
+                <a href="/login" class="btn">Login Page</a>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Firebase App (the core Firebase SDK) -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-app-compat.js"></script>
+    <!-- Add Firebase Auth -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-auth-compat.js"></script>    
+    <!-- Custom Auth Utilities -->
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/revoke-all-tokens.js"></script>
+    
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const firebaseStatus = document.getElementById('firebase-status');
+            const firebaseDebug = document.getElementById('firebase-debug');
+            const runDiagnosticsBtn = document.getElementById('run-diagnostics');
+            const forceLogoutBtn = document.getElementById('force-logout');
+            const clearStorageBtn = document.getElementById('clear-storage');
+            
+            // Add timestamp formatter
+            function formatTimestamp(timestamp) {
+                return new Date(timestamp * 1000).toLocaleString();
+            }
+            
+            // Override console.log for the diagnostics
+            const originalConsoleLog = console.log;
+            const originalConsoleError = console.error;
+            const originalConsoleWarn = console.warn;
+            const originalConsoleGroup = console.group;
+            const originalConsoleGroupEnd = console.groupEnd;
+            
+            let logBuffer = [];
+            let indentLevel = 0;
+            
+            function getIndent() {
+                return "  ".repeat(indentLevel);
+            }
+            
+            console.log = function(...args) {
+                originalConsoleLog.apply(console, args);
+                logBuffer.push(getIndent() + args.join(' '));
+                updateDebugOutput();
+            };
+            
+            console.error = function(...args) {
+                originalConsoleError.apply(console, args);
+                logBuffer.push(getIndent() + "❌ " + args.join(' '));
+                updateDebugOutput();
+            };
+            
+            console.warn = function(...args) {
+                originalConsoleWarn.apply(console, args);
+                logBuffer.push(getIndent() + "⚠️ " + args.join(' '));
+                updateDebugOutput();
+            };
+            
+            console.group = function(...args) {
+                originalConsoleGroup.apply(console, args);
+                logBuffer.push(getIndent() + "▼ " + args.join(' '));
+                indentLevel++;
+                updateDebugOutput();
+            };
+            
+            console.groupEnd = function() {
+                originalConsoleGroupEnd.apply(console);
+                indentLevel = Math.max(0, indentLevel - 1);
+                updateDebugOutput();
+            };
+            
+            function updateDebugOutput() {
+                firebaseDebug.textContent = logBuffer.join('\n');
+                firebaseDebug.scrollTop = firebaseDebug.scrollHeight;
+            }                // Check current auth state
+            function checkAuthState() {
+                if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length > 0) {
+                    firebase.auth().onAuthStateChanged(function(user) {
+                        if (user) {
+                            firebaseStatus.innerHTML = `
+                                <div class="status status-danger">Signed In</div>
+                                <p>Current user: ${user.email} (${user.uid})</p>
+                                <p>Firebase thinks you are still signed in!</p>
+                                <p><strong>Last login:</strong> ${new Date(user.metadata.lastSignInTime).toLocaleString()}</p>
+                                <p><strong>Account created:</strong> ${new Date(user.metadata.creationTime).toLocaleString()}</p>
+                                <button id="force-super-logout" class="btn btn-danger">Force Super Logout</button>
+                                <button id="revoke-all-tokens" class="btn btn-danger">Revoke All Tokens</button>
+                            `;
+                            
+                            // Add super logout button functionality
+                            document.getElementById('force-super-logout').addEventListener('click', function() {
+                                forceSuperLogout(user.email);
+                            });
+                            
+                            // Add token revocation functionality
+                            document.getElementById('revoke-all-tokens').addEventListener('click', function() {
+                                revokeAllTokens(user.uid, user.email);
+                            });
+                        } else {
+                            firebaseStatus.innerHTML = `
+                                <div class="status status-success">Signed Out</div>
+                                <p>Firebase reports no signed-in user.</p>
+                            `;
+                        }
+                    });
+                } else {
+                    firebaseStatus.innerHTML = `
+                        <div class="status status-warning">Unknown</div>
+                        <p>Firebase SDK not loaded or not initialized.</p>
+                    `;
+                }
+            }
+            
+            // Run Firebase Auth Diagnostics
+            function runDiagnostics() {
+                logBuffer = ["--- Firebase Auth Diagnostics ---\n"];
+                updateDebugOutput();
+                
+                try {
+                    // Check Firebase initialization
+                    if (typeof firebase === 'undefined') {
+                        console.error("Firebase SDK not loaded");
+                        return;
+                    }
+                    
+                    if (!firebase.apps || firebase.apps.length === 0) {
+                        console.error("Firebase not initialized");
+                        return;
+                    }
+                    
+                    console.log("Firebase SDK loaded and initialized");
+                    
+                    // Check auth state
+                    firebase.auth().onAuthStateChanged(function(user) {
+                        if (user) {
+                            console.log("🔴 Firebase Auth State: SIGNED IN");
+                            console.log(`User email: ${user.email}`);
+                            console.log(`User ID: ${user.uid}`);
+                            console.log(`Email verified: ${user.emailVerified}`);
+                            console.log(`Display name: ${user.displayName || 'not set'}`);
+                            
+                            user.getIdToken().then(function(token) {
+                                console.log(`ID token is valid and available: ${token.substring(0, 10)}...`);
+                            }).catch(function(error) {
+                                console.error(`Error getting ID token: ${error.message}`);
+                            });
+                        } else {
+                            console.log("✅ Firebase Auth State: SIGNED OUT");
+                            console.log("No user is currently signed in to Firebase");
+                        }
+                    });
+                    
+                    // Check localStorage for auth data
+                    console.group("Local Storage");
+                    
+                    console.log(`explicitly_logged_out flag: ${localStorage.getItem('explicitly_logged_out')}`);
+                    
+                    let firebaseKeysFound = false;
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (key && (key.startsWith('firebase:') || key.includes(':auth'))) {
+                            firebaseKeysFound = true;
+                            console.log(`Found Firebase key: ${key}`);
+                        }
+                    }
+                    
+                    if (!firebaseKeysFound) {
+                        console.log("✅ No Firebase auth keys found in localStorage");
+                    }
+                    
+                    console.groupEnd();
+                    
+                    // Check sessionStorage
+                    console.group("Session Storage");
+                    
+                    firebaseKeysFound = false;
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const key = sessionStorage.key(i);
+                        if (key && (key.startsWith('firebase:') || key.includes(':auth'))) {
+                            firebaseKeysFound = true;
+                            console.log(`Found Firebase key: ${key}`);
+                        }
+                    }
+                    
+                    if (!firebaseKeysFound) {
+                        console.log("✅ No Firebase auth keys found in sessionStorage");
+                    }
+                    
+                    console.groupEnd();
+                    
+                    // Check IndexedDB
+                    console.group("IndexedDB");
+                    
+                    try {
+                        indexedDB.databases().then(databases => {
+                            let firebaseDbFound = false;
+                            databases.forEach(db => {
+                                if (db.name.toLowerCase().includes('firebase')) {
+                                    firebaseDbFound = true;
+                                    console.log(`Found Firebase database: ${db.name} (v${db.version})`);
+                                }
+                            });
+                            
+                            if (!firebaseDbFound) {
+                                console.log("✅ No Firebase IndexedDB databases found");
+                            }
+                        }).catch(err => {
+                            console.error(`Error listing IndexedDB databases: ${err.message}`);
+                        });
+                    } catch (e) {
+                        console.error(`Error accessing IndexedDB: ${e.message}`);
+                    }
+                    
+                    console.groupEnd();
+                    
+                    // Check cookies
+                    console.group("Cookies");
+                    
+                    const cookies = document.cookie.split(';');
+                    let firebaseCookieFound = false;
+                    
+                    cookies.forEach(cookie => {
+                        const trimmedCookie = cookie.trim();
+                        if (trimmedCookie.includes('firebase') || trimmedCookie.includes('auth')) {
+                            firebaseCookieFound = true;
+                            console.log(`Found potential auth cookie: ${trimmedCookie}`);
+                        }
+                    });
+                    
+                    if (!firebaseCookieFound) {
+                        console.log("✅ No Firebase auth cookies found");
+                    }
+                    
+                    if (document.cookie.includes('session=')) {
+                        console.log("Server session cookie is present");
+                    } else {
+                        console.log("No server session cookie found");
+                    }
+                    
+                    console.groupEnd();
+                    
+                } catch (e) {
+                    console.error(`Error running diagnostics: ${e.message}`);
+                }
+            }
+            
+            // Force logout
+            function forceLogout() {
+                logBuffer = ["--- Forcing Logout ---\n"];
+                updateDebugOutput();
+                
+                try {
+                    // Set logout flag
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    console.log("Set explicitly_logged_out flag to true");
+                    
+                    // Clear localStorage
+                    for (let i = 0; i < localStorage.length; i++) {
+                        const key = localStorage.key(i);
+                        if (key && (key.startsWith('firebase:') || key.includes(':auth'))) {
+                            localStorage.removeItem(key);
+                            console.log(`Removed localStorage item: ${key}`);
+                        }
+                    }
+                    
+                    // Clear sessionStorage
+                    for (let i = 0; i < sessionStorage.length; i++) {
+                        const key = sessionStorage.key(i);
+                        if (key && (key.startsWith('firebase:') || key.includes(':auth'))) {
+                            sessionStorage.removeItem(key);
+                            console.log(`Removed sessionStorage item: ${key}`);
+                        }
+                    }
+                    
+                    // Sign out from Firebase
+                    if (typeof firebase !== 'undefined' && firebase.apps && firebase.apps.length > 0) {
+                        firebase.auth().signOut().then(() => {
+                            console.log("Successfully signed out from Firebase");
+                            
+                            // Clear IndexedDB
+                            try {
+                                const dbNames = ['firebaseLocalStorageDb', 'firebase-heartbeat-database'];
+                                dbNames.forEach(dbName => {
+                                    const req = indexedDB.deleteDatabase(dbName);
+                                    req.onsuccess = () => console.log(`Successfully deleted IndexedDB: ${dbName}`);
+                                    req.onerror = (e) => console.error(`Error deleting IndexedDB ${dbName}: ${e.target.error}`);
+                                });
+                            } catch (e) {
+                                console.error(`Error clearing IndexedDB: ${e.message}`);
+                            }
+                            
+                            setTimeout(() => {
+                                checkAuthState();
+                                console.log("Logout complete! Please reload the page to verify.");
+                            }, 500);
+                        }).catch((error) => {
+                            console.error(`Error signing out: ${error.message}`);
+                        });
+                    } else {
+                        console.error("Firebase not initialized, cannot sign out");
+                    }
+                } catch (e) {
+                    console.error(`Error in force logout: ${e.message}`);
+                }
+            }
+            
+            // Clear all storage
+            function clearAllStorage() {
+                logBuffer = ["--- Clearing All Auth Storage ---\n"];
+                updateDebugOutput();
+                
+                try {
+                    // Set logout flag
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    
+                    // Clear all localStorage
+                    console.log("Clearing localStorage...");
+                    localStorage.clear();
+                    
+                    // Clear all sessionStorage
+                    console.log("Clearing sessionStorage...");
+                    sessionStorage.clear();
+                    
+                    // Clear cookies
+                    console.log("Clearing cookies...");
+                    const cookies = document.cookie.split(";");
+                    for (let i = 0; i < cookies.length; i++) {
+                        const cookie = cookies[i];
+                        const eqPos = cookie.indexOf("=");
+                        const name = eqPos > -1 ? cookie.substr(0, eqPos) : cookie;
+                        document.cookie = name + "=;expires=Thu, 01 Jan 1970 00:00:00 GMT;path=/";
+                        console.log(`Cleared cookie: ${name}`);
+                    }
+                    
+                    // Clear IndexedDB
+                    console.log("Clearing IndexedDB...");
+                    try {
+                        indexedDB.databases().then(databases => {
+                            databases.forEach(db => {
+                                const req = indexedDB.deleteDatabase(db.name);
+                                req.onsuccess = () => console.log(`Deleted database: ${db.name}`);
+                                req.onerror = (e) => console.error(`Error deleting ${db.name}: ${e.target.error}`);
+                            });
+                        }).catch(err => {
+                            console.error(`Error listing databases: ${err.message}`);
+                        });
+                    } catch (e) {
+                        console.error(`Error clearing IndexedDB: ${e.message}`);
+                    }
+                    
+                    console.log("Storage clearing complete!");
+                    console.log("Please reload the page to verify changes.");
+                } catch (e) {
+                    console.error(`Error clearing storage: ${e.message}`);
+                }
+            }
+            
+            // Force Super Logout - most aggressive logout method
+            async function forceSuperLogout(email) {
+                console.log(`Super Logout: Starting aggressive logout process for ${email}`);
+                logBuffer = [`--- Super Logout for ${email} ---\n`];
+                updateDebugOutput();
+                
+                try {
+                    // 1. Set logout flags
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    sessionStorage.setItem('explicitly_logged_out', 'true');
+                    logBuffer.push('✅ Set logout flags in localStorage and sessionStorage');
+                    updateDebugOutput();
+                    
+                    // 2. Clear all storage first
+                    clearAllStorage();
+                    
+                    // 3. Initialize unregistered Firebase instance to avoid contamination from existing auth
+                    const tempApp = firebase.initializeApp({
+                        apiKey: document.querySelector('meta[name="firebase-api-key"]').content,
+                        authDomain: document.querySelector('meta[name="firebase-auth-domain"]').content,
+                        projectId: document.querySelector('meta[name="firebase-project-id"]').content
+                    }, 'temp-logout-app');
+                    
+                    logBuffer.push('✅ Created temporary Firebase app for logout');
+                    updateDebugOutput();
+                    
+                    // 4. Set NONE persistence
+                    try {
+                        await tempApp.auth().setPersistence(firebase.auth.Auth.Persistence.NONE);
+                        logBuffer.push('✅ Set Firebase persistence to NONE');
+                    } catch (e) {
+                        logBuffer.push(`❌ Error setting persistence: ${e.message}`);
+                    }
+                    updateDebugOutput();
+                    
+                    // 5. Get current token to revoke on server if possible
+                    let currentToken = null;
+                    try {
+                        const currentUser = firebase.auth().currentUser;
+                        if (currentUser) {
+                            currentToken = await currentUser.getIdToken();
+                            logBuffer.push('✅ Retrieved token to revoke');
+                        }
+                    } catch (e) {
+                        logBuffer.push(`❌ Error getting token: ${e.message}`);
+                    }
+                    updateDebugOutput();
+                    
+                    // 6. Sign out all Firebase apps
+                    const signoutPromises = [];
+                    firebase.apps.forEach(app => {
+                        signoutPromises.push(app.auth().signOut()
+                            .then(() => logBuffer.push(`✅ Signed out from app: ${app.name}`))
+                            .catch(e => logBuffer.push(`❌ Error signing out from app ${app.name}: ${e.message}`)));
+                    });
+                    
+                    await Promise.all(signoutPromises);
+                    updateDebugOutput();
+                    
+                    // 7. Delete all Firebase apps
+                    const deletePromises = [];
+                    firebase.apps.forEach(app => {
+                        deletePromises.push(app.delete()
+                            .then(() => logBuffer.push(`✅ Deleted Firebase app: ${app.name}`))
+                            .catch(e => logBuffer.push(`❌ Error deleting app ${app.name}: ${e.message}`)));
+                    });
+                    
+                    await Promise.all(deletePromises);
+                    updateDebugOutput();
+                    
+                    // 8. Revoke token on server if available
+                    if (currentToken) {
+                        try {
+                            const revokeResponse = await fetch('/api/auth/revoke-token', {
+                                method: 'POST',
+                                headers: {
+                                    'Content-Type': 'application/json',
+                                    'Cache-Control': 'no-cache, no-store, must-revalidate'
+                                },
+                                body: JSON.stringify({ token: currentToken })
+                            });
+                            
+                            if (revokeResponse.ok) {
+                                logBuffer.push('✅ Successfully revoked token on server');
+                            } else {
+                                const errorText = await revokeResponse.text();
+                                logBuffer.push(`❌ Failed to revoke token: ${errorText}`);
+                            }
+                        } catch (e) {
+                            logBuffer.push(`❌ Error revoking token: ${e.message}`);
+                        }
+                    }
+                    updateDebugOutput();
+                    
+                    // 9. Clear storage again
+                    clearAllStorage();
+                    
+                    // 10. Redirect to logout cleanup page with cache busting
+                    logBuffer.push('✅ Super logout complete! Redirecting to cleanup page...');
+                    updateDebugOutput();
+                    
+                    setTimeout(() => {
+                        window.location.href = `/logout_cleanup?t=${new Date().getTime()}`;
+                    }, 1500);
+                    
+                } catch (e) {
+                    logBuffer.push(`❌ ERROR DURING SUPER LOGOUT: ${e.message}`);
+                    updateDebugOutput();
+                }
+            }
+            
+            // Initialize
+            checkAuthState();
+            
+            // Attach event listeners
+            runDiagnosticsBtn.addEventListener('click', runDiagnostics);
+            forceLogoutBtn.addEventListener('click', forceLogout);
+            clearStorageBtn.addEventListener('click', clearAllStorage);
+            
+            // Run diagnostics on load
+            setTimeout(runDiagnostics, 1000);
+        });
+    </script>
+</body>
+</html>

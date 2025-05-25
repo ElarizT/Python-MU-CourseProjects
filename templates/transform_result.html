@@ -1,0 +1,242 @@
+{% extends "base.html" %}
+{% block title %}Data Transformation Results{% endblock %}
+
+{% block additional_styles %}
+.result-card {
+    background: rgba(36, 40, 80, 0.7);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 24px;
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    overflow: hidden;
+    transition: all 0.4s ease;
+    position: relative;
+}
+
+.result-card::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+    background: linear-gradient(45deg, #6366f1, #06b6d4, #6366f1, #06b6d4);
+    background-size: 400% 400%;
+    z-index: -1;
+    border-radius: 24px;
+    animation: gradient-border 8s ease infinite;
+    opacity: 0.5;
+}
+
+.download-btn {
+    background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
+    border: none;
+    border-radius: 12px;
+    color: white;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    transition: all 0.3s ease;
+}
+
+.download-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(99, 102, 241, 0.6);
+    background: linear-gradient(135deg, #5153cc 0%, #0596ae 100%);
+}
+
+.download-btn:active {
+    transform: translateY(1px);
+}
+
+.code-block {
+    background-color: rgba(20, 24, 54, 0.9);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1rem;
+    overflow-x: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: #e0e7ff;
+    max-height: 400px;
+    overflow-y: auto;
+}
+
+.metrics-card {
+    background-color: rgba(20, 24, 54, 0.7);
+    border-radius: 12px;
+    padding: 1.5rem;
+    height: 100%;
+    transition: all 0.3s ease;
+}
+
+.metrics-card:hover {
+    transform: translateY(-5px);
+    box-shadow: 0 10px 25px rgba(0, 0, 0, 0.2);
+}
+
+.metrics-card i {
+    font-size: 2rem;
+    color: #6366f1;
+    margin-bottom: 1rem;
+}
+
+.metrics-card h3 {
+    font-size: 1.75rem;
+    font-weight: 700;
+    color: #e0e7ff;
+}
+
+.metrics-card p {
+    color: #a3a8c3;
+    margin-bottom: 0;
+}
+
+.change-indicator {
+    font-size: 0.85rem;
+    padding: 0.15rem 0.5rem;
+    border-radius: 12px;
+    font-weight: 600;
+    display: inline-block;
+    margin-left: 0.5rem;
+}
+
+.change-positive {
+    background-color: rgba(16, 185, 129, 0.2);
+    color: #10b981;
+}
+
+.change-negative {
+    background-color: rgba(239, 68, 68, 0.2);
+    color: #ef4444;
+}
+
+.change-neutral {
+    background-color: rgba(109, 113, 249, 0.2);
+    color: #6d71f9;
+}
+
+.return-btn {
+    background-color: transparent;
+    color: #6366f1;
+    border: 1px solid #6366f1;
+    border-radius: 12px;
+    transition: all 0.3s ease;
+}
+
+.return-btn:hover {
+    background-color: rgba(99, 102, 241, 0.1);
+}
+
+@keyframes gradient-border {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h1 class="text-center mb-2">Data Transformation Complete</h1>
+            <p class="text-center text-muted">Your data has been transformed successfully</p>
+        </div>
+    </div>
+
+    <div class="row justify-content-center">
+        <div class="col-12">
+            <div class="result-card p-4 mb-4">
+                <div class="text-center mb-4">
+                    <h4><i class="fas fa-check-circle text-success me-2"></i> Transformation successful!</h4>
+                    <p class="text-muted">Original file: {{ original_filename }}</p>
+                </div>
+                
+                <div class="row mb-4">
+                    <div class="col-md-6 mb-4 mb-md-0">
+                        <div class="metrics-card text-center">
+                            <i class="fas fa-table"></i>
+                            <h3>{{ rows_after }} <small>rows</small></h3>
+                            <p>Transformed data</p>
+                            {% set row_diff = rows_after - rows_before %}
+                            {% if row_diff > 0 %}
+                                <span class="change-indicator change-positive">
+                                    <i class="fas fa-plus-circle"></i> {{ row_diff }} rows
+                                </span>
+                            {% elif row_diff < 0 %}
+                                <span class="change-indicator change-negative">
+                                    <i class="fas fa-minus-circle"></i> {{ row_diff|abs }} rows
+                                </span>
+                            {% else %}
+                                <span class="change-indicator change-neutral">
+                                    <i class="fas fa-equals"></i> No change
+                                </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                    <div class="col-md-6">
+                        <div class="metrics-card text-center">
+                            <i class="fas fa-columns"></i>
+                            <h3>{{ columns_after }} <small>columns</small></h3>
+                            <p>Transformed data</p>
+                            {% set col_diff = columns_after - columns_before %}
+                            {% if col_diff > 0 %}
+                                <span class="change-indicator change-positive">
+                                    <i class="fas fa-plus-circle"></i> {{ col_diff }} columns
+                                </span>
+                            {% elif col_diff < 0 %}
+                                <span class="change-indicator change-negative">
+                                    <i class="fas fa-minus-circle"></i> {{ col_diff|abs }} columns
+                                </span>
+                            {% else %}
+                                <span class="change-indicator change-neutral">
+                                    <i class="fas fa-equals"></i> No change
+                                </span>
+                            {% endif %}
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="text-center mb-4">
+                    <a href="{{ download_url }}" class="btn download-btn">
+                        <i class="fas fa-download me-2"></i>Download Transformed File
+                    </a>
+                </div>
+            </div>
+            
+            <div class="result-card p-4">
+                <h4 class="mb-3"><i class="fas fa-code me-2"></i> Transformation Code</h4>
+                <p class="text-muted">The following pandas code was generated and executed to transform your data:</p>
+                
+                <div class="code-block">
+                    <pre><code>{{ code }}</code></pre>
+                </div>
+                
+                <div class="mt-4 text-center">
+                    <a href="{{ url_for('transform_data') }}" class="btn return-btn">
+                        <i class="fas fa-arrow-left me-2"></i>Transform Another File
+                    </a>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Could add code highlighting here if needed
+        // For example, using highlight.js or Prism for code syntax highlighting
+    });
+</script>
+{% endblock %}

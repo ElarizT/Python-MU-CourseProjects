@@ -691,19 +691,20 @@
                         <div><strong>Used:</strong> <span id="profileTokenUsed">-</span></div>
                         <div><strong>Daily Limit:</strong> <span id="profileDailyLimit">-</span></div>
                         <div><strong>Remaining:</strong> <span id="profileRemaining">-</span></div>
-                    </div>
-                    <div id="profileDropdown" class="profile-dropdown">
+                    </div>                    <div id="profileDropdown" class="profile-dropdown">
                         <div class="dropdown-item">
                             <i class="fas fa-user me-2"></i> {{ g.user_name }}
                         </div>
-                        <div class="dropdown-divider"></div>                        <a href="#" class="dropdown-item" data-settings-open="true">
-                            <i class="fas fa-cog me-2"></i> Settings                        </a>
+                        <div class="dropdown-divider"></div>
+                        <a href="#" class="dropdown-item" data-settings-open="true">
+                            <i class="fas fa-cog me-2"></i> Settings
+                        </a>
                         {% if g.user_id %}
                         <a href="/account" class="dropdown-item">
                             <i class="fas fa-crown me-2"></i> Subscription Plan
                         </a>
                         <div class="dropdown-divider"></div>
-                        <a href="/logout" class="dropdown-item">
+                        <a href="#" id="profile-logout" class="dropdown-item">
                             <i class="fas fa-sign-out-alt me-2"></i> Logout
                         </a>
                         {% endif %}
@@ -927,9 +928,9 @@
             console.log("Sidebar toggle functionality initialized successfully");
         })();
     });
-</script>
-    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
+</script>    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
     <script src="/static/js/agent.js"></script>
+    <script src="/static/js/file_processing.js"></script>
     <script>
         document.addEventListener('DOMContentLoaded', function() {
             // Direct sidebar toggle implementation
@@ -1168,8 +1169,14 @@
                                     default:
                                         successMsg = `File uploaded successfully. Let me know what you'd like to do with ${file.name}.`;
                                 }
+                                  // Add a note if the content was large and truncated
+                                let sizeNote = '';
+                                if (data.is_truncated) {
+                                    const sizeMB = (data.full_content_size / (1024 * 1024)).toFixed(2);
+                                    sizeNote = `<p><em>Note: This is a large file (${sizeMB}MB of text). I have the content and can answer questions about it.</em></p>`;
+                                }
                                 
-                                botMsg.innerHTML = `<div class="message-bubble"><p>${successMsg}</p><p><em>Ask me a question about this file to get started.</em></p></div>`;
+                                botMsg.innerHTML = `<div class="message-bubble"><p>${successMsg}</p>${sizeNote}<p><em>Ask me a question about this file to get started.</em></p></div>`;
                                 
                                 // No automatic message will be sent - user must explicitly ask about the file
                             } else {
@@ -1643,9 +1650,8 @@
                                     <div class="settings-usage-item">
                                         <div class="settings-usage-value" id="settings-tokens-remaining">{{ (daily_limit|default(25000)) - (current_usage|default(0)) }}</div>
                                         <div class="settings-usage-label">Remaining</div>
-                                    </div>
-                                    <div class="settings-usage-item">
-                                        <div class="settings-usage-value">{{ usage_percentage|default(0) }}%</div>
+                                    </div>                                    <div class="settings-usage-item">
+                                        <div class="settings-usage-value" id="settings-usage-percentage">{{ usage_percentage|default(0) }}%</div>
                                         <div class="settings-usage-label">Used</div>
                                     </div>
                                     <div class="settings-usage-item">
@@ -1816,5 +1822,23 @@
 
     <!-- Settings Modal Script -->
     <script src="/static/js/settings-modal.js"></script>
+    <script>
+document.addEventListener('DOMContentLoaded', function() {
+    var profileLogout = document.getElementById('profile-logout');
+    if (profileLogout) {
+        profileLogout.addEventListener('click', function(e) {
+            e.preventDefault();
+            localStorage.setItem('explicitly_logged_out', 'true');
+            if (window.logoutUtils && window.logoutUtils.forceFirebaseLogout) {
+                window.logoutUtils.forceFirebaseLogout().then(function() {
+                    window.location.href = '/logout_cleanup?t=' + Date.now();
+                });
+            } else {
+                window.location.href = '/logout_cleanup?t=' + Date.now();
+            }
+        });
+    }
+});
+</script>
 </body>
 </html>

@@ -1,0 +1,143 @@
+{% extends "layout.html" %}
+
+{% block title %}AI-Powered Presentation Builder | LightYearAI{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/presentation.css') }}?v={{ range(1, 10000) | random }}">
+{% endblock %}
+
+{% block content %}
+<div class="content-container">
+    <div class="header-section">
+        <h1>AI-Powered Presentation Generator</h1>
+        <p class="subtitle">Create professional presentations with just a topic - our AI handles the rest</p>
+    </div>
+    
+    <div class="tabs">
+        <button class="tab-button active" data-tab="topic-tab">
+            <i class="fa fa-magic"></i> Topic-Based
+        </button>
+        <button class="tab-button" data-tab="text-tab">
+            <i class="fa fa-file-text"></i> Text or File
+        </button>
+    </div>
+    
+    <div class="tab-content">
+        <div id="topic-tab" class="tab-pane active">
+            <div id="topic-presentation-container">
+                <!-- Topic presentation generator will be initialized here -->
+            </div>
+        </div>
+        
+        <div id="text-tab" class="tab-pane">
+            <div class="presentation-builder-container">
+                <h2>Create Presentation from Text or File</h2>
+                
+                <div class="presentation-form">
+                    <form id="presentation-form" method="post" enctype="multipart/form-data">
+                        <div class="form-group">
+                            <label for="presentation-title">Presentation Title (Optional)</label>
+                            <input type="text" id="presentation-title" name="title" class="form-control" placeholder="Leave blank to generate automatically">
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="presentation-text">Text Content</label>
+                            <textarea id="presentation-text" name="text" class="form-control" rows="8" placeholder="Enter the text you want to convert into a presentation"></textarea>
+                        </div>
+                        
+                        <p class="or-divider">- OR -</p>
+                        
+                        <div class="form-group">
+                            <label for="presentation-file">Upload File</label>
+                            <input type="file" id="presentation-file" name="file" class="form-control" accept=".txt,.pdf,.docx">
+                            <small class="form-text text-muted">Supported formats: TXT, PDF, DOCX</small>
+                        </div>
+                        
+                        <div class="form-group">
+                            <label for="presentation-tone">Presentation Style</label>
+                            <select id="presentation-tone" name="tone" class="form-control">
+                                <option value="professional" selected>Professional</option>
+                                <option value="academic">Academic</option>
+                                <option value="casual">Casual</option>
+                            </select>
+                        </div>
+                        
+                        <div class="action-buttons">
+                            <button type="submit" id="create-presentation" class="btn btn-primary">Create Presentation</button>
+                        </div>
+                    </form>
+                    
+                    <div id="presentation-loader" class="loader" style="display: none;">
+                        <div class="spinner"></div>
+                        <p>Creating your presentation...</p>
+                    </div>
+                    
+                    <div id="presentation-result" class="result" style="display: none;">
+                        <h3>Your Presentation is Ready</h3>
+                        <div class="action-buttons">
+                            <a href="#" id="download-link" class="btn btn-success" target="_blank">
+                                <i class="fa fa-download"></i> Download Presentation
+                            </a>
+                            <a href="#" id="view-link" class="btn btn-info" target="_blank">
+                                <i class="fa fa-eye"></i> View in Browser
+                            </a>
+                        </div>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+    
+    <div class="info-section">
+        <div class="info-card feature">
+            <i class="fa fa-lightbulb-o feature-icon"></i>
+            <h3>AI-Powered Content</h3>
+            <p>Our AI analyses your topic and generates relevant, factual content structured into logical slides</p>
+        </div>
+        
+        <div class="info-card feature">
+            <i class="fa fa-magic feature-icon"></i>
+            <h3>Instant Creation</h3>
+            <p>Get a professional presentation in seconds, no design skills needed</p>
+        </div>
+        
+        <div class="info-card feature">
+            <i class="fa fa-desktop feature-icon"></i>
+            <h3>Professional Design</h3>
+            <p>Beautiful templates, consistent styling, and proper formatting</p>
+        </div>
+        
+        <div class="info-card feature">
+            <i class="fa fa-download feature-icon"></i>
+            <h3>Easy Export</h3>
+            <p>Download as PowerPoint files compatible with all presentation software</p>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script src="{{ url_for('static', filename='js/presentation.js') }}?v={{ range(1, 10000) | random }}"></script>
+<script src="{{ url_for('static', filename='js/topic_presentation.js') }}?v={{ range(1, 10000) | random }}"></script>
+
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        // Tab switching functionality
+        const tabButtons = document.querySelectorAll('.tab-button');
+        const tabPanes = document.querySelectorAll('.tab-pane');
+        
+        tabButtons.forEach(button => {
+            button.addEventListener('click', () => {
+                // Remove active class from all buttons and panes
+                tabButtons.forEach(btn => btn.classList.remove('active'));
+                tabPanes.forEach(pane => pane.classList.remove('active'));
+                
+                // Add active class to clicked button and corresponding pane
+                button.classList.add('active');
+                const tabId = button.getAttribute('data-tab');
+                document.getElementById(tabId).classList.add('active');
+            });
+        });
+    });
+</script>
+{% endblock %}

@@ -1,0 +1,1639 @@
+{% extends "base.html" %}
+
+{% block title %}Study Buddy{% endblock %}
+
+{% block head %}
+<style>
+/* Study Buddy specific styles */
+.main-content-wrapper {
+    position: relative;
+    display: flex;
+    flex-direction: column;
+    height: 100%;
+}
+.card-header {
+    background: transparent;
+    border-bottom: none;
+    padding: 1.5rem 1.5rem 0.5rem;
+}
+.card-body {
+    padding: 1rem 1.5rem;
+    flex-grow: 1;
+    overflow-y: auto;
+    display: flex;
+    flex-direction: column;
+}
+.card-footer {
+    background: transparent;
+    border-top: none;
+    padding: 0.5rem 1.5rem 1.5rem;
+}
+.user-message {
+    align-self: flex-end;
+    background: rgba(99, 102, 241, 0.15);
+    border-left: none;
+    border-right: 4px solid rgba(99, 102, 241, 0.8);
+}
+.bot-message {
+    align-self: flex-start;
+    background: rgba(56, 189, 248, 0.15);
+    border-left: 4px solid rgba(56, 189, 248, 0.8);
+    border-right: none;
+    max-width: 85%;
+}
+
+/* Sidebar styling - Updated to match entertainment */
+.col-md-3 {
+    transition: all 0.3s ease;
+}
+.sidebar-hidden {
+    max-width: 0;
+    padding: 0 !important;
+    margin: 0 !important;
+    overflow: hidden;
+    opacity: 0;
+    visibility: hidden;
+}
+.main-col {
+    transition: all 0.3s ease;
+}
+.main-col.expanded {
+    margin-left: 0;
+    flex: 0 0 100%;
+    max-width: 100%;
+}
+.sidebar-toggle {
+    position: absolute;
+    left: 10px;
+    top: 50%;
+    transform: translateY(-50%);
+    background: linear-gradient(90deg, #6366f1 0%, #38bdf8 100%);
+    color: white;
+    border: none;
+    border-radius: 50%;
+    width: 40px;
+    height: 40px;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    cursor: pointer;
+    z-index: 10;
+    box-shadow: 0 4px 12px rgba(0, 0, 0, 0.2);
+    transition: all 0.3s ease;
+}
+.sidebar-toggle:hover {
+    transform: translateY(-50%) scale(1.1);
+    box-shadow: 0 6px 16px rgba(99, 102, 241, 0.4);
+}
+.sidebar-toggle:active {
+    transform: translateY(-50%) scale(0.95);
+}
+.sidebar-toggle i {
+    font-size: 1rem;
+    transition: all 0.3s ease;
+}
+.sidebar-overlay {
+    position: fixed;
+    top: 0;
+    left: 0;
+    right: 0;
+    bottom: 0;
+    background: rgba(0, 0, 0, 0.5);
+    z-index: 998;
+    display: none;
+    backdrop-filter: blur(2px);
+    transition: all 0.3s ease;
+}
+.sidebar-overlay.show {
+    display: block;
+}
+
+/* Chat history sidebar - Updated to match entertainment */
+.chat-sidebar {
+    background: linear-gradient(180deg, #232946 60%, #1a1f35 100%);
+    border-radius: 12px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+    box-shadow: 0 2px 12px rgba(0, 0, 0, 0.1);
+    max-height: 500px;
+    overflow-y: auto;
+    transition: all 0.3s ease;
+}
+.chat-sidebar h4 {
+    color: #fff;
+    font-size: 1.1rem;
+    margin-bottom: 0.8rem;
+    display: flex;
+    align-items: center;
+}
+.chat-sidebar h4 svg {
+    margin-right: 0.5rem;
+}
+.chat-history-item {
+    padding: 0.6rem 0.8rem;
+    border-radius: 8px;
+    margin-bottom: 0.5rem;
+    cursor: pointer;
+    color: #e0e7ff;
+    background: rgba(255, 255, 255, 0.05);
+    transition: all 0.2s ease;
+    font-size: 0.9rem;
+    border-left: 3px solid rgba(255, 255, 255, 0.3);
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+}
+.chat-history-item:hover {
+    background: rgba(255, 255, 255, 0.1);
+    border-left-color: #6366f1;
+}
+.chat-history-item.active {
+    background: rgba(99, 102, 241, 0.2);
+    border-left-color: #6366f1;
+}
+.chat-history-item .history-content {
+    flex-grow: 1;
+    overflow: hidden;
+    text-overflow: ellipsis;
+    white-space: nowrap;
+}
+.chat-history-item .history-title {
+    font-weight: 500;
+}
+.chat-history-item .history-date {
+    font-size: 0.75rem;
+    opacity: 0.7;
+    display: block;
+    margin-top: 0.2rem;
+}
+.chat-history-actions {
+    display: none;
+    margin-left: 0.5rem;
+}
+.chat-history-item:hover .chat-history-actions {
+    display: flex;
+}
+.chat-history-actions button {
+    background: none;
+    border: none;
+    color: #e0e7ff;
+    font-size: 0.85rem;
+    padding: 0.15rem;
+    margin-left: 0.25rem;
+    opacity: 0.7;
+    transition: opacity 0.2s ease;
+}
+.chat-history-actions button:hover {
+    opacity: 1;
+}
+.new-chat-btn {
+    width: 100%;
+    margin-bottom: 1rem;
+    display: flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    background: #6366f1;
+    color: white;
+    border: none;
+    border-radius: 8px;
+    padding: 0.75rem;
+    font-weight: 500;
+    box-shadow: 0 2px 5px rgba(0, 0, 0, 0.2);
+    transition: all 0.2s ease;
+}
+.new-chat-btn:hover {
+    background: #4f46e5;
+    transform: translateY(-1px);
+}
+
+/* Study history title input */
+.rename-input {
+    width: 100%;
+    background: rgba(255, 255, 255, 0.1);
+    border: 1px solid rgba(255, 255, 255, 0.2);
+    color: white;
+    padding: 0.25rem 0.5rem;
+    border-radius: 4px;
+    font-size: 0.9rem;
+}
+.rename-input:focus {
+    outline: none;
+    border-color: rgba(99, 102, 241, 0.5);
+}
+
+/* Responsive adjustments */
+@media (max-width: 767.98px) {
+    .sidebar-col {
+        position: fixed;
+        left: 0;
+        top: 0;
+        height: 100%;
+        z-index: 1050;
+        background: rgba(27, 32, 59, 0.95);
+        padding: 1rem;
+        max-width: 300px;
+        width: 80%;
+    }
+    .sidebar-hidden {
+        left: -100%;
+    }
+    .sidebar-overlay {
+        position: fixed;
+        top: 0;
+        left: 0;
+        right: 0;
+        bottom: 0;
+        background: rgba(0, 0, 0, 0.5);
+        z-index: 1040;
+        display: none;
+    }
+    .sidebar-overlay.show {
+        display: block;
+    }
+}
+
+/* PDF upload and status */
+.pdf-upload-container {
+    background-color: rgba(30, 41, 59, 0.6);
+    border-radius: 10px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+.pdf-dropzone {
+    border: 2px dashed rgba(99, 102, 241, 0.4);
+    border-radius: 10px;
+    padding: 1.5rem;
+    text-align: center;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.pdf-dropzone:hover {
+    border-color: rgba(99, 102, 241, 0.8);
+    background-color: rgba(99, 102, 241, 0.05);
+}
+.pdf-info {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    padding: 0.5rem 1rem;
+    background: rgba(99, 102, 241, 0.1);
+    border-radius: 8px;
+    border-left: 3px solid #6366f1;
+}
+.pdf-info-details {
+    display: flex;
+    flex-direction: column;
+}
+.pdf-info-details .pdf-name {
+    font-weight: 500;
+}
+.pdf-info-details .pdf-size {
+    font-size: 0.8rem;
+    opacity: 0.7;
+}
+.pdf-remove-btn {
+    background: none;
+    border: none;
+    color: rgba(99, 102, 241, 0.8);
+    cursor: pointer;
+    padding: 0.25rem;
+    border-radius: 4px;
+    transition: all 0.2s ease;
+}
+.pdf-remove-btn:hover {
+    background: rgba(99, 102, 241, 0.1);
+    color: #6366f1;
+}
+.pdf-status {
+    display: flex;
+    align-items: center;
+    gap: 0.5rem;
+    padding: 0.5rem 1rem;
+    background: rgba(56, 189, 248, 0.1);
+    border-left: 3px solid #38bdf8;
+    border-radius: 8px;
+    margin-top: 0.5rem;
+}
+.copy-btn {
+    position: absolute;
+    top: 0.5rem;
+    right: 0.5rem;
+    padding: 0.25rem 0.5rem;
+    background: rgba(255, 255, 255, 0.1);
+    border: none;
+    border-radius: 4px;
+    color: #cbd5e1;
+    cursor: pointer;
+    opacity: 0;
+    transition: opacity 0.2s ease;
+}
+.message:hover .copy-btn {
+    opacity: 1;
+}
+
+/* Add suggestions styling */
+.suggestion-chips {
+    display: flex;
+    flex-wrap: wrap;
+    gap: 0.5rem;
+    margin-top: 0.75rem;
+}
+.suggestion-chip {
+    background: rgba(99, 102, 241, 0.1);
+    color: #6366f1;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    border-radius: 16px;
+    padding: 0.35rem 0.8rem;
+    font-size: 0.9rem;
+    cursor: pointer;
+    transition: all 0.2s ease;
+}
+.suggestion-chip:hover {
+    background: rgba(99, 102, 241, 0.2);
+    transform: translateY(-1px);
+}
+
+/* Modern Study Tips - Updated to match entertainment */
+.modern-study-tips {
+    background: rgba(30, 41, 59, 0.7);
+    border-radius: 12px;
+    padding: 1.25rem;
+    margin-top: 1.5rem;
+    box-shadow: 0 4px 10px rgba(0, 0, 0, 0.1);
+}
+.study-tips-header {
+    border-bottom: 1px solid rgba(255, 255, 255, 0.1);
+    padding-bottom: 0.75rem;
+    margin-bottom: 1rem;
+}
+.tips-icon-bg {
+    display: flex;
+    align-items: center;
+    justify-content: center;
+}
+.modern-study-tips h4 {
+    font-size: 1.1rem;
+    font-weight: 500;
+    color: #e2e8f0;
+}
+.tips-list {
+    list-style: none;
+    padding: 0;
+    margin: 0;
+    display: grid;
+    grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+    gap: 0.75rem;
+}
+.tips-list li {
+    display: flex;
+    align-items: flex-start;
+    padding: 0.5rem 0;
+    position: relative;
+}
+.tip-badge {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    width: 20px;
+    height: 20px;
+    background: linear-gradient(135deg, #6366f1 0%, #38bdf8 100%);
+    color: white;
+    border-radius: 50%;
+    font-size: 0.75rem;
+    font-weight: 600;
+    margin-right: 0.75rem;
+    flex-shrink: 0;
+}
+.tips-list li strong {
+    color: #e2e8f0;
+    font-weight: 500;
+    margin-right: 0.35rem;
+    font-size: 0.9rem;
+}
+.tip-desc {
+    color: #94a3b8;
+    font-size: 0.8rem;
+}
+
+/* Typing indicator */
+.typing-indicator {
+    display: flex;
+    align-items: center;
+    gap: 8px;
+    padding: 1rem;
+    margin-bottom: 1rem;
+}
+.typing-indicator .dot {
+    width: 8px;
+    height: 8px;
+    background-color: rgba(56, 189, 248, 0.8);
+    border-radius: 50%;
+    animation: typing-dot 1.4s infinite ease-in-out both;
+}
+.typing-indicator .dot:nth-child(1) {
+    animation-delay: -0.32s;
+}
+.typing-indicator .dot:nth-child(2) {
+    animation-delay: -0.16s;
+}
+@keyframes typing-dot {
+    0%, 80%, 100% {
+        transform: scale(0.7);
+    }
+    40% {
+        transform: scale(1);
+        opacity: 1;
+    }
+}
+</style>
+{% endblock %}
+
+{% block content %}
+<div class="container-fluid pt-4 main-container">
+    <div class="row">
+        <!-- Sidebar overlay for mobile -->
+        <div id="sidebarOverlay" class="sidebar-overlay"></div>
+        
+        <!-- Sidebar -->
+        <div class="col-md-3 mb-4 mb-md-0 sidebar-col" id="sidebarCol">
+            <button id="newChatBtn" class="btn btn-primary new-chat-btn">
+                <i class="fas fa-plus me-2"></i> {{ g.translations.study_new_chat|default('New Chat') }}
+            </button>
+            <div class="chat-sidebar">
+                <h4>
+                    <svg width="20" height="20" viewBox="0 0 24 24" fill="none">
+                        <path d="M20 2H4C2.9 2 2 2.9 2 4V22L6 18H20C21.1 18 22 17.1 22 16V4C22 2.9 21.1 2 20 2Z" stroke="#6366f1" stroke-width="2" fill="none"/>
+                    </svg>
+                    {{ g.translations.study_chat_history|default('Chat History') }}
+                </h4>
+                <div id="studyChatHistory">
+                    <!-- Chat history items will be populated here -->
+                    <div class="text-center text-muted p-2" id="noHistoryMessage">
+                        <small>{{ g.translations.study_no_previous_chats|default('No previous chats') }}</small>
+                    </div>
+                </div>
+            </div>
+        </div>
+        
+        <!-- Main Chat Area -->
+        <div class="col-md-9 main-col" id="mainCol">
+            <div class="main-content-wrapper">
+                <button id="sidebarToggle" class="sidebar-toggle" title="Close sidebar">
+                    <i class="fas fa-chevron-left" id="toggleIcon"></i>
+                </button>
+                <div class="card-header">
+                    <h3>
+                        <svg width="24" height="24" viewBox="0 0 24 24" fill="none" class="align-middle me-2">
+                            <path d="M12 2L2 7L12 12L22 7L12 2Z" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M2 17L12 22L22 17" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                            <path d="M2 12L12 17L22 12" stroke="#6366f1" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"/>
+                        </svg>
+                        {{ g.translations.nav_study|default('Study Buddy') }}
+                    </h3>
+                </div>
+                <div class="card-body">
+                    <!-- PDF Upload Section -->
+                    <div class="pdf-upload-container">
+                        <div id="pdfDropZone" class="pdf-dropzone">
+                            <input type="file" id="pdfInput" accept=".pdf,.docx" style="display: none;">
+                            <i class="fas fa-file-upload fa-2x mb-2" style="color: #6366f1"></i>
+                            <div>{{ g.translations.study_upload_pdf|default('Upload the file') }}</div>
+                            <div class="text-light small">{{ g.translations.study_file_supported|default('Supported: PDF, DOCX (10MB max)') }}</div>
+                        </div>
+                        <div id="pdfInfo" class="pdf-info" style="display: none;">
+                            <div class="pdf-info-details">
+                                <span id="pdfName" class="pdf-name"></span>
+                                <span id="pdfSize" class="pdf-size"></span>
+                            </div>
+                            <button id="pdfRemoveBtn" class="pdf-remove-btn">
+                                <i class="fas fa-times"></i>
+                            </button>
+                        </div>
+                        <div id="pdfStatus" class="pdf-status" style="display: none;">
+                            <span class="spinner-border spinner-border-sm" role="status"></span>
+                            <span id="pdfStatusText">{{ g.translations.study_analyzing_pdf|default('Analyzing your PDF...') }}</span>
+                        </div>
+                    </div>
+
+                    <!-- Chat Container -->
+                    <div id="studyChatContainer">
+                        <!-- Welcome message -->
+                        <div class="bot-message message">
+                            <p>{{ g.translations.study_greeting|default('Hello! I\'m Liya, your study buddy powered by LightYearAI. How can I help you with your studies today?') }}</p>
+                            <p>{{ g.translations.study_can_ask_about|default('You can ask me about:') }}</p>
+                            <ul>
+                                <li>{{ g.translations.study_homework_help|default('Homework help and solving practice problems') }}</li>
+                                <li>{{ g.translations.study_concept_explanations|default('Explaining difficult concepts in simple terms') }}</li>
+                                <li>{{ g.translations.study_tips|default('Study techniques and exam preparation tips') }}</li>
+                                <li>{{ g.translations.study_research|default('Research assistance and finding reliable sources') }}</li>
+                                <li>{{ g.translations.study_more|default('And much more!') }}</li>
+                            </ul>
+                            <p class="mt-3"><strong>Try these helpful commands:</strong></p>
+                            <ul>
+                                <li><code>/summarize</code> - Condense any text into a concise summary</li>
+                                <li><code>/proofread</code> - Fix grammar, spelling, and improve clarity</li>
+                                <li><code>/translate</code> - Translate text to another language</li>
+                            </ul>
+                            <p class="text-light small" style="color: #a5c9ff !important; font-weight: 500;">Just type a slash (/) followed by the command and your text.</p>
+                        </div>
+                        
+                        <!-- Typing indicator -->
+                        <div class="typing-indicator d-none" id="typingIndicator">
+                            <div class="dot"></div>
+                            <div class="dot"></div>
+                            <div class="dot"></div>
+                        </div>
+                    </div>
+                    
+                    <!-- Chat input field - MOVED ABOVE STUDY TIPS -->
+                    <div class="card-footer p-0 mt-3">
+                        <form id="studyForm" class="position-relative">
+                            <div class="input-group">
+                                <input type="text" id="studyInput" class="form-control" placeholder="{{ g.translations.study_placeholder|default('Ask a question or try /summarize, /proofread, /translate...') }}">
+                                <button type="submit" class="btn btn-primary">
+                                    <i class="fas fa-paper-plane"></i>
+                                </button>
+                            </div>
+                            <!-- Slash command suggestion dropdown -->
+                            <div id="slashCommandSuggestions" class="position-absolute bg-dark rounded p-2 shadow-lg" style="display: none; bottom: 100%; left: 0; margin-bottom: 0.5rem; z-index: 1000; width: 100%; max-width: 450px;">
+                                <div class="d-flex align-items-center mb-2 px-2 text-light">
+                                    <i class="fas fa-slash me-2"></i>
+                                    <span>Available commands:</span>
+                                </div>
+                                <div class="list-group list-group-flush bg-transparent">
+                                    <button type="button" class="list-group-item list-group-item-action d-flex align-items-center command-option bg-transparent text-light border-0">
+                                        <i class="fas fa-spell-check me-2"></i>
+                                        <div>
+                                            <strong>/proofread</strong>
+                                            <small class="d-block text-muted">Fix grammar, spelling, style, and clarity</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action d-flex align-items-center command-option bg-transparent text-light border-0">
+                                        <i class="fas fa-compress-alt me-2"></i>
+                                        <div>
+                                            <strong>/summarize</strong>
+                                            <small class="d-block text-muted">Condense text into a short paragraph</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action d-flex align-items-center command-option bg-transparent text-light border-0">
+                                        <i class="fas fa-expand-alt me-2"></i>
+                                        <div>
+                                            <strong>/expand</strong>
+                                            <small class="d-block text-muted">Add more detail to your text</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action d-flex align-items-center command-option bg-transparent text-light border-0">
+                                        <i class="fas fa-cut me-2"></i>
+                                        <div>
+                                            <strong>/shorten</strong>
+                                            <small class="d-block text-muted">Make text more concise</small>
+                                        </div>
+                                    </button>
+                                    <button type="button" class="list-group-item list-group-item-action d-flex align-items-center command-option bg-transparent text-light border-0">
+                                        <i class="fas fa-language me-2"></i>
+                                        <div>
+                                            <strong>/translate</strong>
+                                            <small class="d-block text-muted">Translate text to another language</small>
+                                        </div>
+                                    </button>
+                                </div>
+                            </div>
+                        </form>
+                    </div>
+
+                    <!-- Study Tips Section - Updated to match entertainment page -->
+                    <div class="entertainment-resources modern-study-tips mt-3">
+                        <div class="study-tips-header d-flex align-items-center mb-2">
+                            <div class="tips-icon-bg me-2">
+                                <svg width="28" height="28" viewBox="0 0 24 24" fill="none"><circle cx="12" cy="12" r="11" fill="#6366f1" opacity="0.13"/><path d="M12 18v1.5M9 21h6" stroke="#6366f1" stroke-width="1.5" stroke-linecap="round"/><path d="M8 15a4 4 0 1 1 8 0c0 1.5-1 2.5-2 3h-4c-1-0.5-2-1.5-2-3z" stroke="#6366f1" stroke-width="1.5" fill="#fff"/></svg>
+                            </div>
+                            <h4 class="mb-0">{{ g.translations.study_tips_title|default('Study Tips') }}</h4>
+                        </div>
+                        <ul class="tips-list">
+                            <li><span class="tip-badge">1</span> <strong>{{ g.translations.study_tip_specific|default('Be specific') }}</strong> <span class="tip-desc">{{ g.translations.study_tip_specific_desc|default('for more accurate answers') }}</span></li>
+                            <li><span class="tip-badge">2</span> <strong>{{ g.translations.study_tip_subject|default('Mention subject') }}</strong> <span class="tip-desc">{{ g.translations.study_tip_subject_desc|default('for appropriate context') }}</span></li>
+                            <li><span class="tip-badge">3</span> <strong>{{ g.translations.study_tip_complex|default('Break down topics') }}</strong> <span class="tip-desc">{{ g.translations.study_tip_complex_desc|default('for better understanding') }}</span></li>
+                            <li><span class="tip-badge">4</span> <strong>{{ g.translations.study_tip_examples|default('Ask for examples') }}</strong> <span class="tip-desc">{{ g.translations.study_tip_examples_desc|default('to reinforce concepts') }}</span></li>
+                        </ul>
+                        
+                        <!-- ChatGPT-style command options -->
+                        <div class="study-command-options mt-4">
+                            <div class="d-flex justify-content-center mb-3">
+                                <h5 class="text-center fw-bold mb-0">What else would you like to do?</h5>
+                            </div>
+                            <div class="command-buttons-container d-flex flex-wrap justify-content-center gap-2">
+                                <button class="command-option-btn d-flex align-items-center gap-2 rounded-pill px-3 py-2 border-0" style="background-color: rgba(56, 189, 248, 0.15);">
+                                    <span class="command-icon"><i class="fas fa-spell-check"></i></span>
+                                    <span class="command-text">/proofread</span>
+                                </button>
+                                <button class="command-option-btn d-flex align-items-center gap-2 rounded-pill px-3 py-2 border-0" style="background-color: rgba(56, 189, 248, 0.15);">
+                                    <span class="command-icon"><i class="fas fa-compress-alt"></i></span>
+                                    <span class="command-text">/summarize</span>
+                                </button>
+                                <button class="command-option-btn d-flex align-items-center gap-2 rounded-pill px-3 py-2 border-0" style="background-color: rgba(56, 189, 248, 0.15);">
+                                    <span class="command-icon"><i class="fas fa-expand-alt"></i></span>
+                                    <span class="command-text">/expand</span>
+                                </button>
+                                <button class="command-option-btn d-flex align-items-center gap-2 rounded-pill px-3 py-2 border-0" style="background-color: rgba(56, 189, 248, 0.15);">
+                                    <span class="command-icon"><i class="fas fa-cut"></i></span>
+                                    <span class="command-text">/shorten</span>
+                                </button>
+                                <button class="command-option-btn d-flex align-items-center gap-2 rounded-pill px-3 py-2 border-0" style="background-color: rgba(56, 189, 248, 0.15);">
+                                    <span class="command-icon"><i class="fas fa-language"></i></span>
+                                    <span class="command-text">/translate</span>
+                                </button>
+                            </div>
+                        </div>
+                        
+                        <style>
+                            .command-option-btn {
+                                color: #e2e8f0;
+                                transition: all 0.2s ease;
+                                cursor: pointer;
+                                box-shadow: 0 2px 4px rgba(0, 0, 0, 0.1);
+                            }
+                            .command-option-btn:hover {
+                                background-color: rgba(56, 189, 248, 0.25) !important;
+                                transform: translateY(-2px);
+                                box-shadow: 0 4px 8px rgba(0, 0, 0, 0.15);
+                            }
+                            .command-icon {
+                                color: #38bdf8;
+                                font-size: 1.1rem;
+                            }
+                            .command-text {
+                                font-weight: 500;
+                            }
+                        </style>
+                        
+                        <script>
+                            // Add click handlers to command buttons
+                            document.addEventListener('DOMContentLoaded', function() {
+                                const commandBtns = document.querySelectorAll('.command-option-btn');
+                                const studyInput = document.getElementById('studyInput');
+                                
+                                commandBtns.forEach(btn => {
+                                    btn.addEventListener('click', function() {
+                                        const commandText = this.querySelector('.command-text').textContent;
+                                        studyInput.value = commandText + ' ';
+                                        studyInput.focus();
+                                    });
+                                });
+                            });
+                        </script>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Chat Delete Confirmation Modal -->
+<div class="modal fade" id="deleteConfirmModal" tabindex="-1" aria-hidden="true">
+  <div class="modal-dialog modal-dialog-centered">
+    <div class="modal-content">
+      <div class="modal-header">
+        <h5 class="modal-title">{{ g.translations.study_delete_chat|default('Delete Chat') }}</h5>
+        <button type="button" class="btn-close" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        {{ g.translations.study_delete_confirmation|default('Are you sure you want to delete this chat? This action cannot be undone.') }}
+      </div>
+      <div class="modal-footer">
+        <button type="button" class="btn btn-secondary" data-bs-dismiss="modal">{{ g.translations.study_cancel|default('Cancel') }}</button>
+        <button type="button" class="btn btn-danger" id="confirmDeleteBtn">{{ g.translations.study_delete|default('Delete') }}</button>
+      </div>
+    </div>
+  </div>
+</div>
+
+<!-- Toast for copy notification -->
+<div class="toast-container position-fixed bottom-0 end-0 p-3">
+  <div id="copyToast" class="toast align-items-center text-white bg-primary border-0" role="alert" aria-live="assertive" aria-atomic="true">
+    <div class="d-flex">
+      <div class="toast-body">
+        Message copied!
+      </div>
+      <button type="button" class="btn-close btn-close-white me-2 m-auto" data-bs-dismiss="toast" aria-label="Close"></button>
+    </div>
+  </div>
+</div>
+
+<script>
+document.addEventListener('DOMContentLoaded', function() {
+    // DOM Elements
+    const studyForm = document.getElementById('studyForm');
+    const studyInput = document.getElementById('studyInput');
+    const chatContainer = document.getElementById('studyChatContainer');
+    const typingIndicator = document.getElementById('typingIndicator');
+    const chatHistoryContainer = document.getElementById('studyChatHistory');
+    const pdfInput = document.getElementById('pdfInput');
+    const pdfDropZone = document.getElementById('pdfDropZone');
+    const pdfInfo = document.getElementById('pdfInfo');
+    const pdfName = document.getElementById('pdfName');
+    const pdfSize = document.getElementById('pdfSize');
+    const pdfRemoveBtn = document.getElementById('pdfRemoveBtn');
+    const pdfStatus = document.getElementById('pdfStatus');
+    const pdfStatusText = document.getElementById('pdfStatusText');
+    const newChatBtn = document.getElementById('newChatBtn');
+    const noHistoryMessage = document.getElementById('noHistoryMessage');
+    const slashCommandSuggestions = document.getElementById('slashCommandSuggestions');
+    const commandOptions = document.querySelectorAll('.command-option');
+    
+    // Sidebar toggle elements
+    const sidebarToggle = document.getElementById('sidebarToggle');
+    const toggleIcon = document.getElementById('toggleIcon');
+    const sidebarCol = document.getElementById('sidebarCol');
+    const mainCol = document.getElementById('mainCol');
+    const sidebarOverlay = document.getElementById('sidebarOverlay');
+    
+    // Delete confirmation modal
+    const deleteConfirmModal = new bootstrap.Modal(document.getElementById('deleteConfirmModal'));
+    const confirmDeleteBtn = document.getElementById('confirmDeleteBtn');
+    let chatToDelete = null;
+    
+    let messageHistory = [];
+    let activePdfContent = null;
+    let currentChatId = generateChatId();
+    let savedChats = loadSavedChats('study');
+    let sidebarVisible = true;
+    let isRenaming = false;
+
+    // Initialize by loading saved chats
+    updateChatHistory();
+    
+    // Fetch chat history from server for current session
+    fetchChatHistory();
+    
+    // Handle slash command input
+    studyInput.addEventListener('input', function(e) {
+        const value = e.target.value;
+        
+        if (value === '/') {
+            // Show command suggestions
+            slashCommandSuggestions.style.display = 'block';
+        } else if (!value.startsWith('/') || value.includes(' ')) {
+            // Hide suggestions if not a command or if space is added (command is selected)
+            slashCommandSuggestions.style.display = 'none';
+        }
+    });
+    
+    // Handle clicking outside to close slash commands
+    document.addEventListener('click', function(e) {
+        if (!studyInput.contains(e.target) && !slashCommandSuggestions.contains(e.target)) {
+            slashCommandSuggestions.style.display = 'none';
+        }
+    });
+    
+    // Handle Escape key to close slash commands
+    document.addEventListener('keydown', function(e) {
+        if (e.key === 'Escape') {
+            slashCommandSuggestions.style.display = 'none';
+        }
+    });
+    
+    // Make command options clickable
+    commandOptions.forEach(option => {
+        option.addEventListener('click', function() {
+            const commandText = this.querySelector('strong').textContent;
+            // Insert the command into the input field
+            studyInput.value = commandText + ' ';
+            studyInput.focus();
+            // Hide suggestions
+            slashCommandSuggestions.style.display = 'none';
+        });
+        
+        // Add hover effect
+        option.addEventListener('mouseover', function() {
+            this.classList.add('bg-primary', 'bg-opacity-25');
+        });
+        
+        option.addEventListener('mouseout', function() {
+            this.classList.remove('bg-primary', 'bg-opacity-25');
+        });
+    });
+    
+    // Sidebar toggle functionality
+    sidebarToggle.addEventListener('click', toggleSidebar);
+    sidebarOverlay.addEventListener('click', closeSidebar);
+    
+    function toggleSidebar() {
+        if (sidebarVisible) {
+            closeSidebar();
+        } else {
+            openSidebar();
+        }
+    }
+    
+    function closeSidebar() {
+        // Add a slight delay to allow for smooth transition
+        sidebarCol.classList.add('sidebar-hidden');
+        
+        // Wait for transition to complete before updating other elements
+        setTimeout(() => {
+            mainCol.classList.add('expanded');
+            
+            // Update icon
+            toggleIcon.classList.remove('fa-chevron-left');
+            toggleIcon.classList.add('fa-chevron-right');
+            
+            // Update state
+            sidebarVisible = false;
+            sidebarToggle.title = 'Open sidebar';
+            
+            // Hide overlay
+            sidebarOverlay.classList.remove('show');
+        }, 50);
+    }
+    
+    function openSidebar() {
+        // Update layout first
+        mainCol.classList.remove('expanded');
+        
+        // Add a slight delay before showing sidebar for smoother transition
+        setTimeout(() => {
+            // Remove classes
+            sidebarCol.classList.remove('sidebar-hidden');
+            
+            // Update icon
+            toggleIcon.classList.remove('fa-chevron-right');
+            toggleIcon.classList.add('fa-chevron-left');
+            
+            // Update state
+            sidebarVisible = true;
+            sidebarToggle.title = 'Close sidebar';
+            
+            // On mobile, show the overlay
+            if (window.innerWidth < 768) {
+                sidebarOverlay.classList.add('show');
+            }
+        }, 50);
+    }
+    
+    // Adjust sidebar display on window resize
+    window.addEventListener('resize', function() {
+        if (window.innerWidth >= 768) {
+            sidebarOverlay.classList.remove('show');
+        } else if (sidebarVisible) {
+            sidebarOverlay.classList.add('show');
+        }
+    });
+
+    // New chat button functionality
+    newChatBtn.addEventListener('click', function() {
+        // Save current chat if it has messages
+        if (messageHistory.length > 0) {
+            saveCurrentChat();
+        }
+        
+        // Start a new chat
+        messageHistory = [];
+        currentChatId = generateChatId();
+        activePdfContent = null;
+        
+        // Reset chat UI
+        chatContainer.innerHTML = '';
+        const welcomeMessage = document.createElement('div');
+        welcomeMessage.className = 'bot-message message';
+        welcomeMessage.innerHTML = `
+            <p>{{ g.translations.study_greeting|default('Hello! I\'m your study buddy powered by Gemini 2.0 Flash. How can I help you with your studies today?') }}</p>
+            <p>{{ g.translations.study_can_ask_about|default('You can ask me about:') }}</p>
+            <ul>
+                <li>{{ g.translations.study_homework_help|default('Homework help') }}</li>
+                <li>{{ g.translations.study_concept_explanations|default('Concept explanations') }}</li>
+                <li>{{ g.translations.study_tips|default('Study tips') }}</li>
+                <li>{{ g.translations.study_research|default('Research assistance') }}</li>
+                <li>{{ g.translations.study_more|default('And more!') }}</li>
+            </ul>
+        `;
+        chatContainer.appendChild(welcomeMessage);
+        
+        // Reset PDF displays
+        pdfInfo.style.display = 'none';
+        pdfDropZone.style.display = 'block';
+        pdfInput.value = '';
+        
+        // Update chat history sidebar
+        updateChatHistory();
+        
+        // Focus on input
+        studyInput.focus();
+        
+        // On mobile, close sidebar after starting new chat
+        if (window.innerWidth < 768) {
+            closeSidebar();
+        }
+        
+        // Clear the backend chat history
+        clearBackendChatHistory();
+    });
+
+    // Hide PDF info and status on load
+    pdfInfo.style.display = 'none';
+    pdfStatus.style.display = 'none';
+    pdfName.textContent = '';
+    pdfSize.textContent = '';
+
+    // Function to add a message to the chat
+    function addMessage(content, isUser = false) {
+        const messageDiv = document.createElement('div');
+        messageDiv.className = isUser ? 'user-message message' : 'bot-message message';
+        messageDiv.innerHTML = content;
+        // add copy button to message
+        const copyBtn = document.createElement('button');
+        copyBtn.className = 'btn btn-sm btn-outline-secondary copy-btn ms-2';
+        copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+        copyBtn.title = 'Copy message';
+        copyBtn.addEventListener('click', () => {
+            navigator.clipboard.writeText(messageDiv.innerText.trim())
+                .then(() => {
+                    const toastEl = document.getElementById('copyToast');
+                    new bootstrap.Toast(toastEl).show();
+                });
+        });
+        messageDiv.appendChild(copyBtn);
+        chatContainer.appendChild(messageDiv);
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        
+        // Save message to history
+        messageHistory.push({
+            role: isUser ? 'user' : 'assistant',
+            content: content,
+            timestamp: new Date().toISOString()
+        });
+        
+        // Auto-save chat after each message
+        saveCurrentChat();
+        
+        // Update chat history in sidebar
+        updateChatHistory();
+    }
+
+    // Handle form submission
+    studyForm.addEventListener('submit', function(e) {
+        e.preventDefault();
+        const userInput = studyInput.value.trim();
+        
+        if (userInput) {
+            // Process slash commands
+            const isSlashCommand = userInput.startsWith('/');
+            let commandType = null;
+            let commandText = '';
+            let commandMeta = null;
+            
+            if (isSlashCommand) {
+                const parts = userInput.split(' ');
+                const command = parts[0].toLowerCase();
+                
+                // Extract the command and text
+                if (parts.length > 1) {
+                    commandText = parts.slice(1).join(' ');
+                    
+                    // Check which command was used
+                    if (command === '/proofread') {
+                        commandType = 'proofread';
+                    } else if (command === '/summarize') {
+                        commandType = 'summarize';
+                    } else if (command === '/expand') {
+                        commandType = 'expand';
+                    } else if (command === '/shorten') {
+                        commandType = 'shorten';
+                    } else if (command === '/translate') {
+                        commandType = 'translate';
+                        
+                        // Try to parse the target language and text
+                        if (parts.length > 1) {
+                            // Handle cases like "/translate Azerbaijani" (with PDF) or "/translate Azerbaijani pdf"
+                            // or "/translate Azerbaijani some text to translate"
+                            
+                            // First, assume the first word after the command is the target language
+                            commandMeta = parts[1];
+                            
+                            // If there are more parts, join them as the text to translate
+                            if (parts.length > 2) {
+                                commandText = parts.slice(2).join(' ');
+                            } else {
+                                // If only language is provided, assume it's for the PDF
+                                commandText = '';
+                            }
+                        } else {
+                            // Not enough parts for a translate command
+                            commandType = null;
+                        }
+                    }
+                }
+            }
+            
+            // Add user message to chat
+            addMessage(`<p>${userInput}</p>`, true);
+            
+            // Clear input field
+            studyInput.value = '';
+            
+            // Show typing indicator
+            typingIndicator.classList.remove('d-none');
+            
+            // Prepare data to send
+            let requestData = {
+                message: userInput,
+                history: messageHistory
+            };
+            
+            // Add command information if this is a slash command
+            if (commandType) {
+                requestData.command = {
+                    type: commandType,
+                    text: commandText
+                };
+                
+                // Add target language for translate command
+                if (commandType === 'translate' && typeof commandMeta !== 'undefined') {
+                    requestData.command.meta = commandMeta;
+                }
+            }
+            
+            // Add PDF content if available
+            if (activePdfContent) {
+                requestData.pdfContent = activePdfContent;
+            }
+            
+            // Send request to server
+            fetch('/study/chat', {
+                method: 'POST',
+                headers: {
+                    'Content-Type': 'application/json'
+                },
+                body: JSON.stringify(requestData)
+            })
+            .then(response => response.json())
+            .then(data => {
+                // Hide typing indicator
+                typingIndicator.classList.add('d-none');
+                
+                // Add bot response to chat
+                if (data.response) {
+                    addMessage(data.response);
+                } else {
+                    addMessage('<p>Sorry, I encountered an error. Please try again.</p>');
+                }
+            })
+            .catch(error => {
+                console.error('Error:', error);
+                // Hide typing indicator
+                typingIndicator.classList.add('d-none');
+                // Show error message
+                addMessage('<p>Sorry, there was an error processing your request. Please try again.</p>');
+            });
+        }
+    });
+
+    // PDF upload functionality
+    pdfDropZone.addEventListener('click', function() {
+        pdfInput.click();
+    });
+    
+    pdfInput.addEventListener('change', function(e) {
+        const file = e.target.files[0];
+        if (file) {
+            uploadPdf(file);
+        }
+    });
+    
+    // Drag and drop for PDF
+    pdfDropZone.addEventListener('dragover', function(e) {
+        e.preventDefault();
+        pdfDropZone.classList.add('dragover');
+    });
+    
+    pdfDropZone.addEventListener('dragleave', function() {
+        pdfDropZone.classList.remove('dragover');
+    });
+    
+    pdfDropZone.addEventListener('drop', function(e) {
+        e.preventDefault();
+        pdfDropZone.classList.remove('dragover');
+        
+        const file = e.dataTransfer.files[0];
+        if (file) {
+            uploadPdf(file);
+        }
+    });
+    
+    // Remove PDF button
+    pdfRemoveBtn.addEventListener('click', function() {
+        activePdfContent = null;
+        pdfInfo.style.display = 'none';
+        pdfDropZone.style.display = 'block';
+        pdfInput.value = '';
+    });
+
+    function uploadPdf(file) {
+        // Check file type
+        const validTypes = ['application/pdf', 'application/vnd.openxmlformats-officedocument.wordprocessingml.document'];
+        if (!validTypes.includes(file.type)) {
+            alert('Please upload a PDF or DOCX file');
+            return;
+        }
+        
+        // Check file size (max 10MB)
+        if (file.size > 10 * 1024 * 1024) {
+            alert('File size must be less than 10MB');
+            return;
+        }
+        
+        // Show uploading status
+        pdfDropZone.style.display = 'none';
+        pdfInfo.style.display = 'none';
+        pdfStatus.style.display = 'flex';
+        pdfStatusText.textContent = '{{ g.translations.study_analyzing_pdf|default("Analyzing your PDF...") }}';
+        
+        // Create FormData and append the file
+        const formData = new FormData();
+        formData.append('file', file);
+        
+        // Upload the file
+        fetch('/study/upload', {
+            method: 'POST',
+            body: formData
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Network response was not ok');
+            }
+            return response.json();
+        })
+        .then(data => {
+            // Hide status and show info
+            pdfStatus.style.display = 'none';
+            pdfInfo.style.display = 'flex';
+            
+            // Update PDF info
+            pdfName.textContent = data.filename;
+            pdfSize.textContent = formatFileSize(file.size);
+            
+            // Store PDF content
+            activePdfContent = {
+                name: data.filename,
+                content: data.content
+            };
+            
+            // Add system message to chat
+            const systemMessage = document.createElement('div');
+            systemMessage.className = 'system-message message';
+            systemMessage.innerHTML = `<p>{{ g.translations.study_pdf_ready|default('PDF ready! You can now ask questions about this document.') }}</p>`;
+            chatContainer.appendChild(systemMessage);
+            chatContainer.scrollTop = chatContainer.scrollHeight;
+        })
+        .catch(error => {
+            console.error('Error:', error);
+            
+            // Hide status and show dropzone again
+            pdfStatus.style.display = 'none';
+            pdfDropZone.style.display = 'block';
+            
+            // Show error message
+            const errorMessage = g.current_language === 'pl' ? 
+                                'Wystąpił błąd podczas przetwarzania pliku. Proszę spróbować ponownie lub użyć innego pliku.' :
+                                g.current_language === 'az' ? 
+                                    'Faylı emal edərkən xəta baş verdi. Zəhmət olmasa təkrar cəhd edin və ya başqa bir fayl istifadə edin.' : 
+                                    'An error occurred while processing the file. Please try again or use a different file.';
+            
+            alert(errorMessage);
+        });
+    }
+    
+    function formatFileSize(bytes) {
+        if (bytes < 1024) return bytes + ' bytes';
+        else if (bytes < 1048576) return (bytes / 1024).toFixed(1) + ' KB';
+        else return (bytes / 1048576).toFixed(1) + ' MB';
+    }
+    
+    // Chat History Functions
+    function generateChatId() {
+        return Date.now().toString(36) + Math.random().toString(36).substring(2);
+    }
+    
+    function saveCurrentChat() {
+        if (messageHistory.length < 2) return; // Don't save chats with only the welcome message
+        
+        const userMessages = messageHistory.filter(msg => msg.role === 'user');
+        if (userMessages.length === 0) return; // Don't save if no user messages
+        
+        // Get first user message as title, truncate if needed
+        let title = userMessages[0].content.replace(/<[^>]*>/g, '').trim();
+        title = title.length > 30 ? title.substring(0, 27) + '...' : title;
+        
+        const chat = {
+            id: currentChatId,
+            title: title,
+            timestamp: new Date().toISOString(),
+            messages: messageHistory,
+            pdfContent: activePdfContent,
+            customTitle: null // Add this field for custom titles
+        };
+        
+        // Load existing chats and add/update current one
+        let chats = loadSavedChats('study');
+        const existingIndex = chats.findIndex(c => c.id === currentChatId);
+        
+        if (existingIndex >= 0) {
+            // Preserve custom title if it exists
+            if (chats[existingIndex].customTitle) {
+                chat.customTitle = chats[existingIndex].customTitle;
+            }
+            chats[existingIndex] = chat;
+        } else {
+            chats.push(chat);
+        }
+        
+        // Keep only the most recent 20 chats
+        if (chats.length > 20) {
+            chats.sort((a, b) => new Date(b.timestamp) - new Date(a.timestamp));
+            chats = chats.slice(0, 20);
+        }
+        
+        // Save to local storage
+        localStorage.setItem('studyChats', JSON.stringify(chats));
+        savedChats = chats;
+    }
+    
+    function loadSavedChats(type) {
+        const key = type + 'Chats'; // 'studyChats' or 'entertainmentChats'
+        const saved = localStorage.getItem(key);
+        return saved ? JSON.parse(saved) : [];
+    }
+    
+    function loadChat(chatId) {
+        const chat = savedChats.find(c => c.id === chatId);
+        if (!chat) return;
+        
+        // Save current chat if needed
+        if (messageHistory.length > 0) {
+            saveCurrentChat();
+        }
+        
+        // Switch to the selected chat
+        currentChatId = chatId;
+        messageHistory = [...chat.messages];
+        activePdfContent = chat.pdfContent;
+        
+        // Update UI
+        chatContainer.innerHTML = '';
+        messageHistory.forEach(msg => {
+            const messageDiv = document.createElement('div');
+            messageDiv.className = msg.role === 'user' ? 'user-message message' : 'bot-message message';
+            messageDiv.innerHTML = msg.content;
+            
+            // Add copy button
+            const copyBtn = document.createElement('button');
+            copyBtn.className = 'btn btn-sm btn-outline-secondary copy-btn ms-2';
+            copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+            copyBtn.title = 'Copy message';
+            copyBtn.addEventListener('click', () => {
+                navigator.clipboard.writeText(messageDiv.innerText.trim())
+                    .then(() => {
+                        const toastEl = document.getElementById('copyToast');
+                        new bootstrap.Toast(toastEl).show();
+                    });
+            });
+            messageDiv.appendChild(copyBtn);
+            chatContainer.appendChild(messageDiv);
+        });
+        
+        // Update PDF display if needed
+        if (activePdfContent) {
+            pdfInfo.style.display = 'flex';
+            pdfDropZone.style.display = 'none';
+            pdfName.textContent = activePdfContent.name;
+            // Approximate size display for loaded chats
+            pdfSize.textContent = '~ PDF';
+        } else {
+            pdfInfo.style.display = 'none';
+            pdfDropZone.style.display = 'block';
+        }
+        
+        // Scroll to bottom
+        chatContainer.scrollTop = chatContainer.scrollHeight;
+        
+        // Update chat history sidebar
+        updateChatHistory();
+        
+        // On mobile, close sidebar after selecting a chat
+        if (window.innerWidth < 768) {
+            closeSidebar();
+        }
+        
+        // Load chat from backend
+        fetchChatHistory();
+    }
+
+    function deleteChat(chatId) {
+        chatToDelete = chatId;
+        deleteConfirmModal.show();
+    }
+    
+    confirmDeleteBtn.addEventListener('click', function() {
+        if (!chatToDelete) return;
+        
+        // Remove chat from saved chats
+        savedChats = savedChats.filter(chat => chat.id !== chatToDelete);
+        
+        // Save updated chats to local storage
+        localStorage.setItem('studyChats', JSON.stringify(savedChats));
+        
+        // If we're deleting the current chat, start a new one
+        if (chatToDelete === currentChatId) {
+            // Start a new chat (simplified version - not repeating all the newChatBtn code)
+            messageHistory = [];
+            currentChatId = generateChatId();
+            activePdfContent = null;
+            
+            // Reset chat UI
+            chatContainer.innerHTML = '';
+            const welcomeMessage = document.createElement('div');
+            welcomeMessage.className = 'bot-message message';
+            welcomeMessage.innerHTML = `
+                <p>{{ g.translations.study_greeting|default('Hello! I\'m your study buddy powered by Gemini 2.0 Flash. How can I help you with your studies today?') }}</p>
+                <p>{{ g.translations.study_can_ask_about|default('You can ask me about:') }}</p>
+                <ul>
+                    <li>{{ g.translations.study_homework_help|default('Homework help') }}</li>
+                    <li>{{ g.translations.study_concept_explanations|default('Concept explanations') }}</li>
+                    <li>{{ g.translations.study_tips|default('Study tips') }}</li>
+                    <li>{{ g.translations.study_research|default('Research assistance') }}</li>
+                    <li>{{ g.translations.study_more|default('And more!') }}</li>
+                </ul>
+            `;
+            chatContainer.appendChild(welcomeMessage);
+            
+            // Reset PDF displays
+            pdfInfo.style.display = 'none';
+            pdfDropZone.style.display = 'block';
+            pdfInput.value = '';
+        }
+        
+        // Close the modal
+        deleteConfirmModal.hide();
+        chatToDelete = null;
+        
+        // Update chat history sidebar
+        updateChatHistory();
+        
+        // Clear backend chat history if the deleted chat was current
+        if (chatToDelete === currentChatId) {
+            clearBackendChatHistory();
+        }
+    });
+    
+    function renameChat(chatId, event) {
+        event.stopPropagation();
+        
+        if (isRenaming) return; // Prevent multiple rename fields
+        isRenaming = true;
+        
+        const chatIndex = savedChats.findIndex(chat => chat.id === chatId);
+        if (chatIndex === -1) return;
+        
+        const chat = savedChats[chatIndex];
+        const chatItem = event.target.closest('.chat-history-item');
+        const contentElement = chatItem.querySelector('.history-content');
+        
+        // Store original content to restore if cancelled
+        const originalContent = contentElement.innerHTML;
+        
+        // Create input field
+        const inputElement = document.createElement('input');
+        inputElement.type = 'text';
+        inputElement.className = 'rename-input';
+        inputElement.value = chat.customTitle || chat.title;
+        
+        // Replace content with input
+        contentElement.innerHTML = '';
+        contentElement.appendChild(inputElement);
+        
+        // Focus and select all text
+        inputElement.focus();
+        inputElement.select();
+        
+        // Handle Enter key to save
+        inputElement.addEventListener('keyup', function(e) {
+            if (e.key === 'Enter') {
+                finishRenaming(chatId, inputElement.value, contentElement, chatItem);
+            } else if (e.key === 'Escape') {
+                // Cancel rename on Escape
+                contentElement.innerHTML = originalContent;
+                isRenaming = false;
+            }
+        });
+        
+        // Handle click outside to save
+        const clickOutsideHandler = function(e) {
+            if (!contentElement.contains(e.target)) {
+                finishRenaming(chatId, inputElement.value, contentElement, chatItem);
+                document.removeEventListener('click', clickOutsideHandler);
+            }
+        };
+        
+        // Add event listener with a small delay to prevent immediate trigger
+        setTimeout(() => {
+            document.addEventListener('click', clickOutsideHandler);
+        }, 100);
+    }
+    
+    function finishRenaming(chatId, newTitle, contentElement, chatItem) {
+        if (!isRenaming) return;
+        isRenaming = false;
+        
+        // Validate input
+        newTitle = newTitle.trim();
+        if (!newTitle) {
+            // If empty, revert to original title
+            updateChatHistory();
+            return;
+        }
+        
+        // Update chat title
+        const chatIndex = savedChats.findIndex(chat => chat.id === chatId);
+        if (chatIndex >= 0) {
+            savedChats[chatIndex].customTitle = newTitle;
+            
+            // Save to local storage
+            localStorage.setItem('studyChats', JSON.stringify(savedChats));
+            
+            // Update UI
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'history-title';
+            titleSpan.textContent = newTitle;
+            
+            const dateSpan = document.createElement('span');
+            dateSpan.className = 'history-date';
+            const date = new Date(savedChats[chatIndex].timestamp);
+            dateSpan.textContent = date.toLocaleDateString() + ' ' + 
+                                   date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            contentElement.innerHTML = '';
+            contentElement.appendChild(titleSpan);
+            contentElement.appendChild(dateSpan);
+            
+            // If this is the current chat and we're viewing it, update currentChatId
+            if (chatId === currentChatId) {
+                // The chat is already loaded, we just renamed it
+                chatItem.classList.add('active');
+            }
+        }
+    }
+    
+    function updateChatHistory() {
+        chatHistoryContainer.innerHTML = '';
+        
+        if (savedChats.length === 0) {
+            noHistoryMessage.style.display = 'block';
+            return;
+        }
+        
+        noHistoryMessage.style.display = 'none';
+        
+        // Sort chats by timestamp, newest first
+        const sortedChats = [...savedChats].sort((a, b) => 
+            new Date(b.timestamp) - new Date(a.timestamp)
+        );
+        
+        // Add each chat to the sidebar
+        sortedChats.forEach(chat => {
+            const chatItem = document.createElement('div');
+            chatItem.className = 'chat-history-item';
+            if (chat.id === currentChatId) {
+                chatItem.classList.add('active');
+            }
+            
+            const date = new Date(chat.timestamp);
+            const formattedDate = date.toLocaleDateString() + ' ' + 
+                                  date.toLocaleTimeString([], { hour: '2-digit', minute: '2-digit' });
+            
+            // Create chat content div (title and date)
+            const contentDiv = document.createElement('div');
+            contentDiv.className = 'history-content';
+            
+            const titleSpan = document.createElement('span');
+            titleSpan.className = 'history-title';
+            titleSpan.textContent = chat.customTitle || chat.title;
+            
+            const dateSpan = document.createElement('span');
+            dateSpan.className = 'history-date';
+            dateSpan.textContent = formattedDate;
+            
+            contentDiv.appendChild(titleSpan);
+            contentDiv.appendChild(dateSpan);
+            
+            // Create actions div with rename and delete buttons
+            const actionsDiv = document.createElement('div');
+            actionsDiv.className = 'chat-history-actions';
+            
+            const renameBtn = document.createElement('button');
+            renameBtn.innerHTML = '<i class="fas fa-edit"></i>';
+            renameBtn.title = 'Rename chat';
+            renameBtn.addEventListener('click', (e) => renameChat(chat.id, e));
+            
+            const deleteBtn = document.createElement('button');
+            deleteBtn.innerHTML = '<i class="fas fa-trash-alt"></i>';
+            deleteBtn.title = 'Delete chat';
+            deleteBtn.addEventListener('click', (e) => {
+                e.stopPropagation();
+                deleteChat(chat.id);
+            });
+            
+            actionsDiv.appendChild(renameBtn);
+            actionsDiv.appendChild(deleteBtn);
+            
+            // Add content and actions to chat item
+            chatItem.appendChild(contentDiv);
+            chatItem.appendChild(actionsDiv);
+            
+            // Add click handler to load chat when clicking on the item (but not on buttons)
+            chatItem.addEventListener('click', () => loadChat(chat.id));
+            
+            chatHistoryContainer.appendChild(chatItem);
+        });
+    }
+    
+    // Function to fetch chat history from the backend
+    function fetchChatHistory() {
+        fetch('/api/chat_history/study')
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to fetch chat history');
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Fetched backend chat history:', data);
+            
+            // If we're starting fresh (no messages) and have server history, display it
+            if (chatContainer.childElementCount <= 1 && data.messages && data.messages.length > 0) {
+                chatContainer.innerHTML = '';
+                
+                // Display each message from backend
+                data.messages.forEach(msg => {
+                    const isUser = msg.role === 'user';
+                    const messageDiv = document.createElement('div');
+                    messageDiv.className = isUser ? 'user-message message' : 'bot-message message';
+                    messageDiv.innerHTML = msg.content;
+                    
+                    // Add copy button
+                    const copyBtn = document.createElement('button');
+                    copyBtn.className = 'btn btn-sm btn-outline-secondary copy-btn ms-2';
+                    copyBtn.innerHTML = '<i class="fas fa-copy"></i>';
+                    copyBtn.title = 'Copy message';
+                    copyBtn.addEventListener('click', () => {
+                        navigator.clipboard.writeText(messageDiv.innerText.trim())
+                            .then(() => {
+                                const toastEl = document.getElementById('copyToast');
+                                new bootstrap.Toast(toastEl).show();
+                            });
+                    });
+                    messageDiv.appendChild(copyBtn);
+                    chatContainer.appendChild(messageDiv);
+                });
+                
+                // Update local message history
+                if (data.history) {
+                    messageHistory = data.history;
+                    saveCurrentChat(); // Save to local storage
+                }
+                
+                // Scroll to bottom
+                chatContainer.scrollTop = chatContainer.scrollHeight;
+            }
+        })
+        .catch(error => {
+            console.error('Error loading chat history:', error);
+        });
+    }
+    
+    // Function to clear backend chat history
+    function clearBackendChatHistory() {
+        fetch('/api/chat_history/study/clear', {
+            method: 'POST',
+            headers: {
+                'Content-Type': 'application/json'
+            }
+        })
+        .then(response => {
+            if (!response.ok) {
+                throw new Error('Failed to clear chat history');
+            }
+            return response.json();
+        })
+        .then(data => {
+            console.log('Chat history cleared on backend:', data);
+        })
+        .catch(error => {
+            console.error('Error clearing chat history:', error);
+        });
+    }
+});
+</script>
+{% endblock %}

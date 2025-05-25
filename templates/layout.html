@@ -1,14 +1,25 @@
 <!DOCTYPE html>
 <html lang="{{ g.current_language }}">
 <head>
+    <!-- Immediate loading fix for homepage - must be first script -->
+    <script src="/static/js/ultimate-homepage-fix.js"></script>
+    
     <meta charset="UTF-8">
     <meta name="viewport" content="width=device-width, initial-scale=1.0">
     <title>{% block title %}LightYearAI{% endblock %}</title>
     <!-- Favicon -->
     <link rel="apple-touch-icon" sizes="180x180" href="/static/favicon/apple-touch-icon.png">
     <link rel="icon" type="image/png" sizes="32x32" href="/static/favicon/favicon-32x32.png">
-    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon/favicon-16x16.png">
-    <link rel="shortcut icon" href="/static/favicon/favicon.ico">
+    <link rel="icon" type="image/png" sizes="16x16" href="/static/favicon/favicon-16x16.png">    <link rel="shortcut icon" href="/static/favicon/favicon.ico">
+      <!-- Firebase Configuration -->
+    <meta name="firebase-api-key" content="{{ firebase_api_key if firebase_api_key is defined else g.firebase_api_key }}">
+    <meta name="firebase-auth-domain" content="{{ firebase_auth_domain if firebase_auth_domain is defined else g.firebase_auth_domain }}">
+    <meta name="firebase-project-id" content="{{ firebase_project_id if firebase_project_id is defined else g.firebase_project_id }}">
+    <meta name="firebase-storage-bucket" content="{{ firebase_storage_bucket if firebase_storage_bucket is defined else g.firebase_storage_bucket }}">    <meta name="firebase-messaging-sender-id" content="{{ firebase_messaging_sender_id if firebase_messaging_sender_id is defined else g.firebase_messaging_sender_id }}">
+    <meta name="firebase-app-id" content="{{ firebase_app_id if firebase_app_id is defined else g.firebase_app_id }}">
+    
+    <!-- Homepage loading fix - this must run before any other scripts -->
+    <script src="/static/js/homepage-loading-fix.js"></script>
     
     <!-- Stylesheets -->
     <link href="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/css/bootstrap.min.css" rel="stylesheet">
@@ -16,44 +27,35 @@
     <link rel="stylesheet" href="/static/css/custom.css">
     <link rel="stylesheet" href="/static/css/settings-modal.css">
     
-    {% block head_scripts %}{% endblock %}
-    <style>
+    {% block head_scripts %}{% endblock %}    <style>
         body {
             background-color: #f8f9fa;
             color: #333;
-        }
-        
+
         .navbar {
             background: linear-gradient(135deg, #181c2f 0%, #232946 100%);
-        }
-        
+
         .navbar-brand {
             color: #ffffff;
             font-weight: bold;
-        }
-        
+
         .nav-link {
             color: rgba(255, 255, 255, 0.8);
-        }
-        
+
         .nav-link:hover {
             color: #ffffff;
-        }
-        
+
         .dropdown-menu {
             background-color: #232946;
             border: 1px solid rgba(255, 255, 255, 0.1);
-        }
-        
+
         .dropdown-item {
             color: #ffffff;
-        }
-        
+
         .dropdown-item:hover {
             background-color: rgba(255, 255, 255, 0.1);
             color: #ffffff;
-        }
-        
+
         .profile-dropdown {
             position: absolute;
             top: 100%;
@@ -67,12 +69,10 @@
             overflow: hidden;
             margin-top: 0.5rem;
             box-shadow: 0 4px 20px rgba(0, 0, 0, 0.3);
-        }
-        
+
         .profile-dropdown.show {
             display: block;
-        }
-        
+
         .token-display {
             background-color: rgba(255, 255, 255, 0.1);
             border-radius: 20px;
@@ -83,10 +83,100 @@
             font-size: 0.9rem;
             font-weight: 500;
             transition: all 0.2s ease;
-        }
-    </style>
+
+    </style><!-- Loading manager script -->
+    <script src="/static/js/loading-manager.js"></script>
     
+    <!-- Improved Firebase Logout -->
+    <script src="/static/js/improved-logout.js"></script>
+    
+    <!-- Page initialization -->
+    <script src="/static/js/page-initializer.js"></script>
+    
+    <!-- Fix loading screen issues -->
+    <script src="/static/js/fix-loading-issue.js"></script>
+    
+    <!-- Firebase Authentication Manager -->
+    <script src="/static/js/firebase-auth-manager.js"></script>
+      <!-- Firebase Auth Watchdog - Continuous monitoring of auth state -->
+    <script src="/static/js/force-logout-cleanup.js"></script>
+    <script src="/static/js/firebase-auth-watchdog.js"></script>      <script>
+// Initialize auth state check on page load
+    document.addEventListener('DOMContentLoaded', function() {
+    // Special handling for homepage - force hide any loading screens immediately
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+    console.log('Homepage detected in layout.html, force hiding loading screens');
+
+    // Direct DOM manipulation to hide any loading overlay
+    const loadingOverlay = document.getElementById('global-loading-overlay');
+    if (loadingOverlay) {
+    loadingOverlay.style.opacity = '0';
+    loadingOverlay.style.display = 'none';
+
+    // Also use LoadingManager if available
+    if (window.LoadingManager) {
+    window.LoadingManager.hideLoading();
+
+
+    // Check if explicitly logged out
+    const explicitlyLoggedOut = localStorage.getItem('explicitly_logged_out') === 'true';
+
+    // Clear explicit logout flag on login or signup pages
+    if (window.location.pathname === '/login' || window.location.pathname === '/signup') {
+    localStorage.removeItem('explicitly_logged_out');
+
+    // Show loading only for authenticated pages that need content loading
+    // Skip showing loading for public pages and homepage
+    if (!window.location.pathname.includes('/login') &&
+    !window.location.pathname.includes('/signup') &&
+    !window.location.pathname.includes('/logout') &&
+    window.location.pathname !== '/' &&
+    window.location.pathname !== '') {
+
+    if (window.LoadingManager) {
+    window.LoadingManager.showLoading('Loading application...');
+
+
+    // Handle redirects for logged-out users trying to access protected pages
+    if (explicitlyLoggedOut) {
+    const currentPath = window.location.pathname;
+    const publicPaths = ['/', '/login', '/signup', '/logout', '/logout_cleanup', '/forgot-password'];
+    if (!publicPaths.includes(currentPath) && !currentPath.startsWith('/static/')) {
+    console.log('Redirecting to home page because user explicitly logged out');
+    window.location.href = '/?enforce_logout=true';
+    return;
+    }
+    }
+    });}}}}}}
+</script>
     {% block additional_styles %}{% endblock %}
+      <!-- Immediate loading screen fix for homepage -->
+    <script>
+(function() {
+    // Run this code immediately before anything else loads
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+    console.log('Homepage detected - immediate loading screen fix running');
+    // Set a flag to indicate we've already handled loading for homepage
+    window.homepageLoadingFixed = true;
+    // Function to hide any loading overlay
+    function hideLoadingNow() {
+    const overlay = document.getElementById('global-loading-overlay');
+    if (overlay) {
+    overlay.style.opacity = '0';
+    overlay.style.display = 'none';
+    }
+    }
+
+    // Hide immediately
+    hideLoadingNow();
+
+    // Also schedule additional attempts
+    setTimeout(hideLoadingNow, 10);
+    setTimeout(hideLoadingNow, 50);
+    setTimeout(hideLoadingNow, 100);
+
+    })();}
+</script>
 </head>
 <body>
     <!-- Navigation -->
@@ -104,6 +194,9 @@
                     {% if g.user_id %}
                     <li class="nav-item">
                         <a class="nav-link" href="/">Chat</a>
+                    </li>
+                    <li class="nav-item">
+                        <a class="nav-link" href="/transform">Transform Data</a>
                     </li>
                     <li class="nav-item">
                         <a class="nav-link" href="/account">Account</a>
@@ -175,13 +268,14 @@
                             </a>
                             <a href="/" class="dropdown-item">
                                 <i class="fas fa-home me-2"></i> Homepage
-                            </a>
-                            <a href="/contact" class="dropdown-item">
+                            </a>                            <a href="/contact" class="dropdown-item">
                                 <i class="fas fa-envelope me-2"></i> Contact us
                             </a>
-                            <div class="dropdown-divider"></div>
-                            <a href="/logout" class="dropdown-item">
+                            <div class="dropdown-divider"></div>                            <a href="#" class="dropdown-item" data-auth="logout">
                                 <i class="fas fa-sign-out-alt me-2"></i> Sign out
+                            </a>
+                            <a href="#" class="dropdown-item" data-auth="logout-all">
+                                <i class="fas fa-power-off me-2"></i> Sign out from all devices
                             </a>
                         </div>
                     </li>
@@ -216,9 +310,9 @@
     <!-- Footer -->
     <footer class="footer mt-auto py-3 bg-light">
         <div class="container text-center">
-            <span class="text-muted">&copy; {{ now.year }} LightYearAI. All rights reserved.</span>
+            <span class="text-white">&copy; {{ now.year }} LightYearAI. All rights reserved.</span>
         </div>
-    </footer>    <!-- Settings Modal -->
+    </footer><!-- Settings Modal -->
     <div class="settings-modal-overlay" id="settingsModalOverlay">
         <div class="settings-modal-container" id="settingsModal">
             <div class="settings-header">
@@ -282,34 +376,32 @@
                                     </button>
                                     {% endif %}
                                 </div>
-                            </div>
-                              <div class="settings-form-group">
-                                <label class="settings-label">Daily Token Usage</label>
-                                <div class="settings-progress">
+                </div>
+                <div class="settings-form-group">
+                                <label class="settings-label">Daily Token Usage</label>                                <div class="settings-progress">
                                     <div class="settings-progress-bar" style="width: {{ usage_percentage|default(0) }}%"></div>
-                                </div>
+                </div>
                                 <div class="settings-progress-label">
-                                    <span id="settings-tokens-used">{{ current_usage|default(0) }}</span> / <span id="settings-tokens-total">{{ daily_limit|default(25000) }}</span> tokens used
+                                    <span id="settings-tokens-used">{{ current_usage.tokens_used if current_usage is mapping else current_usage|default(0) }}</span> / <span id="settings-tokens-total">{{ daily_limit|default(25000) }}</span> tokens used
                                 </div>
                                 
                                 <div class="settings-usage-details">
                                     <div class="settings-usage-item">
-                                        <div class="settings-usage-value" id="settings-tokens-remaining">{{ (daily_limit|default(25000)) - (current_usage|default(0)) }}</div>
+                                        <div class="settings-usage-value" id="settings-tokens-remaining">{{ (daily_limit|default(25000)) - (current_usage.tokens_used if current_usage is mapping else current_usage|default(0)) }}</div>
                                         <div class="settings-usage-label">Remaining</div>
-                                    </div>
-                                    <div class="settings-usage-item">
+                </div>
+                <div class="settings-usage-item">
                                         <div class="settings-usage-value">{{ usage_percentage|default(0) }}%</div>
                                         <div class="settings-usage-label">Used</div>
-                                    </div>
-                                    <div class="settings-usage-item">
+                </div>
+                <div class="settings-usage-item">
                                         <div class="settings-usage-value">{{ daily_limit|default(25000) }}</div>
                                         <div class="settings-usage-label">Total</div>
                                     </div>
                                 </div>
                             </div>
-                        </div>
-                        
-                        <div class="settings-section">
+                </div>
+                <div class="settings-section">
                             <h4 class="settings-section-title">Theme</h4>
                             <div class="settings-form-group">
                                 <label class="settings-label" for="settings-theme">App Theme</label>
@@ -319,9 +411,8 @@
                                     <option value="dark">Dark</option>
                                 </select>
                             </div>
-                        </div>
-                        
-                        <div class="settings-section">
+                </div>
+                <div class="settings-section">
                             <h4 class="settings-section-title">Display Options</h4>
                             <div class="settings-form-group">
                                 <label class="settings-toggle-label">
@@ -415,13 +506,13 @@
                                     <div class="settings-usage-item">
                                         <div class="settings-usage-value" id="settings-total-referrals">0</div>
                                         <div class="settings-usage-label">Completed</div>
-                                    </div>
-                                    <div class="settings-usage-item">
+                </div>
+                <div class="settings-usage-item">
                                         <div class="settings-usage-value" id="settings-pending-referrals">0</div>
                                         <div class="settings-usage-label">Pending</div>
                                     </div>
-                                </div>
-                                  <div class="settings-referral-input">
+                </div>
+                <div class="settings-referral-input">
                                     <input type="text" id="settings-referral-link" class="settings-input" placeholder="Your referral link will appear here..." readonly>
                                     <button id="settings-copy-referral" class="settings-btn-copy">
                                         <i class="fas fa-copy"></i> Copy
@@ -431,9 +522,8 @@
                                     <i class="fas fa-check-circle"></i> Link copied to clipboard!
                                 </div>
                             </div>
-                        </div>
-                        
-                        <div class="settings-section">
+                </div>
+                <div class="settings-section">
                             <h4 class="settings-section-title">Chat Management</h4>
                             <div class="settings-form-group">
                                 <label class="settings-label">Manage Archived Chats</label>
@@ -453,13 +543,17 @@
                                     <i class="fas fa-trash-alt me-1"></i> Delete All
                                 </button>
                             </div>
-                        </div>
-                        
-                        <div class="settings-section">
+                </div>
+                <div class="settings-section">
                             <h4 class="settings-section-title">Account Actions</h4>
-                            <button id="settings-logout" class="settings-btn settings-btn-outline">
+                            <button id="settings-logout" class="settings-btn settings-btn-outline" data-auth="logout">
                                 <i class="fas fa-sign-out-alt me-1"></i> Log out on this device
                             </button>
+                            <div class="settings-form-group mt-2">
+                                <button id="settings-logout-all" class="settings-btn settings-btn-danger" data-auth="logout-all">
+                                    <i class="fas fa-power-off me-1"></i> Log out on all devices
+                                </button>
+                            </div>
                         </div>
                     </div>
                 </div>
@@ -468,100 +562,138 @@
     </div>
 
     <!-- JavaScript -->    <script src="https://cdn.jsdelivr.net/npm/bootstrap@5.3.0/dist/js/bootstrap.bundle.min.js"></script>
-    <script src="/static/js/settings-modal.js"></script>
+    <script src="/static/js/settings-modal.js"></script>    <script>
+document.addEventListener('DOMContentLoaded', function() {
+    // User profile dropdown
+    const userProfile = document.getElementById('userProfile');
+    const profileDropdown = document.getElementById('profileDropdown');
+
+    if (userProfile && profileDropdown) {
+    // Toggle dropdown on click
+    userProfile.addEventListener('click', function(e) {
+    e.preventDefault();
+    e.stopPropagation();
+    profileDropdown.classList.toggle('show');
+    });
+
+    // Close dropdown when clicking elsewhere
+    document.addEventListener('click', function(e) {
+    if (profileDropdown.classList.contains('show') && !profileDropdown.contains(e.target)) {
+    profileDropdown.classList.remove('show');
+
+    });
+
+    // Handle clicks inside profile dropdown
+    profileDropdown.addEventListener('click', function(e) {
+    // Stop propagation to prevent dropdown from closing immediately
+    e.stopPropagation();
+
+    // If the click was on a link, allow it to navigate naturally
+    const clickedLink = e.target.closest('a');
+    if (clickedLink) {
+    // The link navigation will happen naturally
+    console.log('Link clicked:', clickedLink.href);
+
+    });
+    }        // Language dropdown functionality
+    const languageItems = document.querySelectorAll('.language-option');
+
+    languageItems.forEach(item => {
+    item.addEventListener('click', function(e) {
+    e.preventDefault();
+    const lang = this.getAttribute('data-lang');
+    window.location.href = '/set_language/' + lang + '?next=' + encodeURIComponent(window.location.pathname);
+    });
+    });
+
+    // Settings Modal Buttons Functionality
+    const settingsUpgradeBtn = document.getElementById('settings-upgrade-btn');
+    const settingsManageSubBtn = document.getElementById('settings-manage-sub-btn');
+
+    if (settingsUpgradeBtn) {
+    settingsUpgradeBtn.addEventListener('click', function() {
+    window.location.href = '/account';
+    });
+
+    if (settingsManageSubBtn) {
+    settingsManageSubBtn.addEventListener('click', function() {
+    // Show loading state
+    settingsManageSubBtn.disabled = true;
+    settingsManageSubBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Loading...';
+
+    fetch('/create-customer-portal-session', {
+    method: 'POST',
+    headers: {
+    'Content-Type': 'application/json',
+
+    })
+    .then(function(response) {
+    return response.json();
+    })
+    .then(function(data) {
+    if (data.error) {
+    alert(data.error);
+    // Reset button state
+    settingsManageSubBtn.disabled = false;
+    settingsManageSubBtn.innerHTML = 'Manage Subscription';
+    return;
+    }
+    // Redirect to Stripe Customer Portal
+    window.location.href = data.url;
+    })
+    .catch(function(error) {
+    console.error('Error:', error);
+    alert('An error occurred. Please try again later.');
+    // Reset button state
+    settingsManageSubBtn.disabled = false;
+    settingsManageSubBtn.innerHTML = 'Manage Subscription';
+    });
+    });
+
+    });}}}}}
+</script>
+      <!-- Logout state enforcement script -->
     <script>
-        document.addEventListener('DOMContentLoaded', function() {
-            // User profile dropdown
-            const userProfile = document.getElementById('userProfile');
-            const profileDropdown = document.getElementById('profileDropdown');
-            
-            if (userProfile && profileDropdown) {
-                // Toggle dropdown on click
-                userProfile.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    e.stopPropagation();
-                    profileDropdown.classList.toggle('show');
-                });
-                
-                // Close dropdown when clicking elsewhere
-                document.addEventListener('click', function(e) {
-                    if (profileDropdown.classList.contains('show') && !profileDropdown.contains(e.target)) {
-                        profileDropdown.classList.remove('show');
-                    }
-                });
-                
-                // Handle clicks inside profile dropdown
-                profileDropdown.addEventListener('click', function(e) {
-                    // Stop propagation to prevent dropdown from closing immediately
-                    e.stopPropagation();
-                    
-                    // If the click was on a link, allow it to navigate naturally
-                    const clickedLink = e.target.closest('a');
-                    if (clickedLink) {
-                        // The link navigation will happen naturally
-                        console.log('Link clicked:', clickedLink.href);
-                    }
-                });
-            }
-            
-            // Language dropdown functionality
-            const languageItems = document.querySelectorAll('.language-option');
-            
-            languageItems.forEach(item => {
-                item.addEventListener('click', function(e) {
-                    e.preventDefault();
-                    const lang = this.getAttribute('data-lang');
-                    window.location.href = '/set_language/' + lang + '?next=' + encodeURIComponent(window.location.pathname);
-                });
-            });
-            
-            // Settings Modal Buttons Functionality
-            const settingsUpgradeBtn = document.getElementById('settings-upgrade-btn');
-            const settingsManageSubBtn = document.getElementById('settings-manage-sub-btn');
-            
-            if (settingsUpgradeBtn) {
-                settingsUpgradeBtn.addEventListener('click', function() {
-                    window.location.href = '/account';
-                });
-            }
-            
-            if (settingsManageSubBtn) {
-                settingsManageSubBtn.addEventListener('click', function() {
-                    // Show loading state
-                    settingsManageSubBtn.disabled = true;
-                    settingsManageSubBtn.innerHTML = '<span class="spinner-border spinner-border-sm me-2" role="status" aria-hidden="true"></span>Loading...';
-                    
-                    fetch('/create-customer-portal-session', {
-                        method: 'POST',
-                        headers: {
-                            'Content-Type': 'application/json',
-                        }
-                    })
-                    .then(function(response) {
-                        return response.json();
-                    })
-                    .then(function(data) {
-                        if (data.error) {
-                            alert(data.error);
-                            // Reset button state
-                            settingsManageSubBtn.disabled = false;
-                            settingsManageSubBtn.innerHTML = 'Manage Subscription';
-                            return;
-                        }
-                        // Redirect to Stripe Customer Portal
-                        window.location.href = data.url;
-                    })
-                    .catch(function(error) {
-                        console.error('Error:', error);
-                        alert('An error occurred. Please try again later.');
-                        // Reset button state
-                        settingsManageSubBtn.disabled = false;
-                        settingsManageSubBtn.innerHTML = 'Manage Subscription';
-                    });
-                });
-            }
-        });
-    </script>
+// This script ensures Firebase auth state matches server session state
+    document.addEventListener('DOMContentLoaded', function() {
+    // Check if user explicitly logged out
+    const explicitlyLoggedOut = localStorage.getItem('explicitly_logged_out') === 'true';
+
+    if (explicitlyLoggedOut) {
+    console.log('User explicitly logged out, enforcing logout state');
+
+    // Only attempt Firebase logout if Firebase is available
+    if (typeof firebase !== 'undefined' && firebase.auth) {
+    // Force Firebase logout
+    firebase.auth().signOut().catch(function(error) {
+    console.error('Error signing out from Firebase:', error);
+    });
+
+    // Check current page URL to avoid redirect loops
+    const currentPath = window.location.pathname;
+    if (currentPath !== '/' && currentPath !== '/login' && currentPath !== '/signup' &&
+    currentPath !== '/forgot-password') {
+    console.log('Redirecting to home page because user explicitly logged out');
+    window.location.href = '/?enforce_logout=true';
+
+
+    // Clear explicit logout flag on login or signup pages
+    if (window.location.pathname === '/login' || window.location.pathname === '/signup') {
+    localStorage.removeItem('explicitly_logged_out');
+
+    });}}}}
+</script>
+    
+    <!-- Force Logout Script - Runs before Firebase SDK is loaded -->
+    <script src="/static/js/force-logout.js"></script>
+      <!-- Firebase App (the core Firebase SDK) -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-app-compat.js"></script>
+    <!-- Add Firebase Auth -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-auth-compat.js"></script>
+    
+    <!-- Custom JS -->
+    <script src="/static/js/auth.js"></script>
+    <script src="/static/js/logout-all-devices.js"></script>
     
     {% block scripts %}{% endblock %}
 </body>

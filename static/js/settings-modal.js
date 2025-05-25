@@ -18,16 +18,32 @@ document.addEventListener('DOMContentLoaded', function() {
     
     // Open settings modal
     function openSettingsModal() {
+        if (!settingsOverlay) {
+            console.error('Settings overlay element not found');
+            return;
+        }
+        
         settingsOverlay.style.display = 'flex';
         document.body.style.overflow = 'hidden'; // Prevent scrolling behind modal
         
         // Fade in animation
         setTimeout(() => {
-            settingsOverlay.style.opacity = '1';
+            if (settingsOverlay) {
+                settingsOverlay.style.opacity = '1';
+            }
         }, 10);
         
-        // Load latest usage data when opening settings
-        loadUserUsageData();
+        // Load latest usage data when opening settings - not during page load
+        // This prevents the introduction page from hanging
+        setTimeout(() => {
+            // Only load these if we're not on the homepage to prevent hanging
+            if (window.location.pathname !== '/' && window.location.pathname !== '') {
+                loadUserUsageData();
+                loadReferralData();
+            } else {
+                console.log('Skipping data load for homepage to prevent hanging');
+            }
+        }, 100);
     }
     
     // Close settings modal
@@ -73,11 +89,16 @@ document.addEventListener('DOMContentLoaded', function() {
                         console.error('Error from API:', data.error);
                         return;
                     }
-                    
-                    // Update the progress bar
+                      // Update the progress bar
                     const progressBar = document.querySelector('.settings-progress-bar');
                     if (progressBar) {
                         progressBar.style.width = `${data.usage_percentage}%`;
+                    }
+                    
+                    // Update usage percentage display
+                    const usagePercentageEl = document.getElementById('settings-usage-percentage');
+                    if (usagePercentageEl) {
+                        usagePercentageEl.textContent = `${data.usage_percentage}%`;
                     }
                     
                     // Update text labels - check elements exist before updating
@@ -88,7 +109,7 @@ document.addEventListener('DOMContentLoaded', function() {
                     if (tokensTotalEl) tokensTotalEl.textContent = data.daily_limit;
                     
                     const tokensRemainingEl = document.getElementById('settings-tokens-remaining');
-                    if (tokensRemainingEl) tokensRemainingEl.textContent = data.daily_limit - data.current_usage;
+                    if (tokensRemainingEl) tokensRemainingEl.textContent = data.remaining || (data.daily_limit - data.current_usage);
                     
                     // Update color based on usage percentage
                     if (progressBar) {
@@ -295,12 +316,33 @@ document.addEventListener('DOMContentLoaded', function() {
         const logoutBtn = document.getElementById('settings-logout');
         if (logoutBtn) {
             logoutBtn.addEventListener('click', function() {
-                window.location.href = '/logout';
+                // Use the enhanced logout function if available, otherwise fallback
+                if (window.logoutUtils && window.logoutUtils.forceFirebaseLogout) {
+                    console.log('Using enhanced logout function');
+                    
+                    // Set explicit logout flag
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    
+                    // Use enhanced logout with redirect
+                    window.logoutUtils.forceFirebaseLogout().then(() => {
+                        window.location.href = '/logout_cleanup?t=' + new Date().getTime();
+                    });
+                } 
+                else if (window.authUtils && window.authUtils.signOut) {
+                    console.log('Using authUtils.signOut() for logout');
+                    // Set explicit logout flag before calling signOut
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    window.authUtils.signOut();
+                } 
+                else {
+                    console.log('No logout utilities available, redirecting to /logout_cleanup');
+                    localStorage.setItem('explicitly_logged_out', 'true');
+                    window.location.href = '/logout_cleanup?t=' + new Date().getTime();
+                }
             });
         }
     }
-    
-    // Initialize the modal
+      // Initialize the modal
     function initializeSettingsModal() {
         // Set initial state
         settingsOverlay.style.opacity = '0';
@@ -309,13 +351,11 @@ document.addEventListener('DOMContentLoaded', function() {
         // Set General tab as active by default
         switchSettingsTab('settings-tab-general');
         
-        // Load referral data if available
-        if (referralLinkInput) {
-            loadReferralData();
-        }
-        
         // Initialize event listeners
         initializeEventListeners();
+        
+        // Don't load referral data or usage stats immediately on page load
+        // This will be done when the modal is actually opened
     }
     
     // Only initialize if modal exists

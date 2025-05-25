@@ -478,59 +478,70 @@ def parse_presentation_content(text):
         use_nltk = True
     except ImportError:
         use_nltk = False
-    
-    # Check if it's a physics-related presentation about quantum mechanics/ultraviolet catastrophe
-    physics_keywords = ['quantum', 'planck', 'physics', 'ultraviolet', 'catastrophe', 
-                       'radiation', 'atom', 'bohr', 'electron']
-    
+        
+    # Use the content provided by the user without specialized presentation templates
     text_lower = text.lower()
-    physics_topic = any(keyword in text_lower for keyword in physics_keywords)
     
-    # For Ultraviolet Catastrophe presentations, use specialized structured content
-    if physics_topic and ('ultraviolet' in text_lower or 'catastrophe' in text_lower or 
-                        'planck' in text_lower or 'quantum' in text_lower):
-        return create_physics_presentation()
+    # We won't use predefined presentations, but always create dynamic presentations
+    # based on the content provided by the user
     
     # Split text into sections/paragraphs
     sections = []
-    paragraphs = [p.strip() for p in re.split(r'\n\s*\n|\n{2,}', text) if p.strip()]
     
-    # If the input appears to be already structured with section headers
-    section_pattern = re.compile(r'^(#+\s+|[A-Z][^.\n]{2,30}[:.!?]?)(.*)$', re.MULTILINE)
+    # First, try to detect markdown-like headings which often come from AI-generated content
+    markdown_headings = re.findall(r'^#{1,3}\s+(.+?)$', text, re.MULTILINE)
     
-    for paragraph in paragraphs:
-        section_match = section_pattern.search(paragraph)
+    # If we found markdown headings, try to split content by these headings
+    if len(markdown_headings) >= 3:  # We have enough headings for slides
+        print(f"Found {len(markdown_headings)} markdown headings, parsing by section")
+        heading_pattern = re.compile(r'^(#{1,3}\s+.+?)(?=^#{1,3}\s+|\Z)', re.MULTILINE | re.DOTALL)
+        section_matches = heading_pattern.findall(text)
         
-        if section_match:
-            # Found a section header
-            title = section_match.group(1).strip('# :.')
-            content = section_match.group(2).strip()
+        for section_text in section_matches:            # Extract title and content
+            lines = section_text.strip().split('\n')
+            if lines:
+                title = re.sub(r'^#{1,3}\s+', '', lines[0]).strip()
+                content = '\n'.join(lines[1:]).strip()
+                sections.append({'title': title, 'content': content})
+    
+    # If no markdown headings found, try regular paragraphs
+    if not sections:
+        paragraphs = [p.strip() for p in re.split(r'\n\s*\n|\n{2,}', text) if p.strip()]
+        
+        # If the input appears to be already structured with section headers
+        section_pattern = re.compile(r'^(#+\s+|[A-Z][^.\n]{2,30}[:.!?]?)(.*)$', re.MULTILINE)
+    
+        for paragraph in paragraphs:
+            section_match = section_pattern.search(paragraph)
             
-            if not content:
-                # If this is just a title without content, look for content in next paragraph
-                content = paragraphs[paragraphs.index(paragraph) + 1] if paragraphs.index(paragraph) < len(paragraphs) - 1 else ""
-            
-            sections.append({'title': title, 'content': content})
-        else:
-            # Regular paragraph - try to extract a title from first sentence
-            if use_nltk:
-                sentences = sent_tokenize(paragraph)
-            else:
-                sentences = re.split(r'(?<=[.!?])\s+', paragraph)
-            
-            if sentences:
-                # Use first sentence as title if it's not too long, otherwise create a title
-                first_sentence = sentences[0].strip()
-                title_words = first_sentence.split()
-                
-                if len(title_words) <= 10:
-                    title = first_sentence
-                    content = ' '.join(sentences[1:]) if len(sentences) > 1 else ""
-                else:
-                    title = ' '.join(title_words[:7]) + "..."
-                    content = paragraph
+            if section_match:
+                # Found a section header
+                title = section_match.group(1).strip('# :.')
+                content = section_match.group(2).strip()
+                if not content:
+                    # If this is just a title without content, look for content in next paragraph
+                    content = paragraphs[paragraphs.index(paragraph) + 1] if paragraphs.index(paragraph) < len(paragraphs) - 1 else ""
                 
                 sections.append({'title': title, 'content': content})
+            else:
+                # Regular paragraph - try to extract a title from first sentence
+                if use_nltk:
+                    sentences = sent_tokenize(paragraph)
+                else:
+                    sentences = re.split(r'(?<=[.!?])\s+', paragraph)
+                
+                if sentences:                    # Use first sentence as title if it's not too long, otherwise create a title
+                    first_sentence = sentences[0].strip()
+                    title_words = first_sentence.split()
+                    
+                    if len(title_words) <= 10:
+                        title = first_sentence
+                        content = ' '.join(sentences[1:]) if len(sentences) > 1 else ""
+                    else:
+                        title = ' '.join(title_words[:7]) + "..."
+                        content = paragraph
+                    
+                    sections.append({'title': title, 'content': content})
     
     # Process each section into a slide with bullet points
     slides = []
@@ -569,14 +580,46 @@ def extract_bullets_from_text(text):
     """
     # Define placeholder indicators to filter out instructional content
     placeholder_indicators = ["discuss the", "outline the", "describe the", "explain the", "list the"]
-    
-    # Check if text already contains bullet points using multiple patterns
+      # Check if text already contains bullet points using multiple patterns
     # Look for various bullet markers (•, -, *, +) or numbered items (1., 2., etc.)
     bullet_patterns = [
         r'(?:^|\n)[•\-\*\+]\s+(.+?)(?:\n|$)',                 # Standard bullet points
         r'(?:^|\n)(?:\d+\.|\d+\))\s+(.+?)(?:\n|$)',           # Numbered items 1. or 1)
-        r'(?:^|\n)(?:[A-Za-z]\.|\([A-Za-z]\))\s+(.+?)(?:\n|$)' # Lettered items A. or (A)
+        r'(?:^|\n)(?:[A-Za-z]\.|\([A-Za-z]\))\s+(.+?)(?:\n|$)', # Lettered items A. or (A)
+        r'(?:^|\n)[\u2022\u2023\u25E6\u2043\u2219]\s+(.+?)(?:\n|$)'  # Unicode bullet variants
     ]
+    
+    # Special handling for AI-generated responses that often use standard formats
+    ai_format_patterns = [
+        # Look for patterns like "1. Point" followed by "2. Point" that indicate a list
+        r'(?:^|\n)(?:\d+\.)\s+([^\n]+)(?:\n\d+\.\s+[^\n]+)+',
+        # Look for repetitive patterns that might indicate structured content
+        r'(?:^|\n)([^:]+):\s*([^\n]+)(?:\n[^:]+:\s*[^\n]+)+',
+    ]
+    
+    # First check if text has obvious multi-line list structure
+    has_list_structure = False
+    for pattern in ai_format_patterns:
+        if re.search(pattern, text):
+            has_list_structure = True
+            break
+    
+    # If we detected a list structure, be more aggressive in parsing bullet points
+    if has_list_structure:
+        # Extract sentence fragments that appear to be part of a list
+        lines = text.split('\n')
+        list_items = []
+        for line in lines:
+            # Look for numbered items, items after a dash, or short sentences that look like points
+            if re.match(r'^\s*\d+\.\s+', line) or re.match(r'^\s*[\-\*\+•]\s+', line) or \
+               (len(line.strip()) > 15 and len(line.strip()) < 100 and line.strip().endswith(('.',' statistics'))):
+                clean_line = re.sub(r'^\s*(?:\d+\.|[\-\*\+•])\s+', '', line.strip())
+                if clean_line:
+                    list_items.append(clean_line)
+        
+        # If we found what look like list items, use them
+        if len(list_items) >= 3:
+            return list_items[:5]
     
     existing_bullets = []
     for pattern in bullet_patterns:
@@ -718,19 +761,48 @@ def generate_bullet_points_from_title(title):
         return [
             "Establishing clear goals and objectives aligned with organizational vision",
             "Analyzing market and competitive landscape to identify opportunities",
-            "Developing actionable implementation steps with assigned responsibilities",
-            "Creating measurement and evaluation frameworks with KPIs",
+            "Developing actionable implementation steps with assigned responsibilities",            "Creating measurement and evaluation frameworks with KPIs",
             "Building flexibility to adapt to changing conditions and new information"
         ]
-    else:
-        # Default generic bullet points with actual content instead of placeholders
+    elif any(word in words for word in ['implementation', 'execute', 'executing']):
         return [
-            "Research shows that 85% of success comes from effective implementation",
-            "Regular assessment and iteration improve outcomes by up to 40%",
-            "Cross-functional collaboration increases innovation by 67%",
-            "Organizations with clear metrics outperform competitors by 23%",
-            "Early adoption of new methodologies provides lasting competitive advantages"
+            "Create clear step-by-step action plans with defined owner responsibilities",
+            "Establish regular checkpoints to monitor progress and address issues early",
+            "Focus on quick wins to build momentum and demonstrate value",
+            "Ensure adequate resources and technical support throughout the process",
+            "Communicate results and learnings to all stakeholders consistently"
         ]
+    elif any(word in words for word in ['conclusion', 'summary', 'takeaway']):
+        return [
+            "Implement action items within established timeline and accountability",
+            "Track performance metrics against established baseline measurements",
+            "Continuously review and refine approach based on feedback",
+            "Document lessons learned to improve future initiatives",
+            "Build upon successes to expand and scale effective practices"
+        ]
+    else:
+        # Generate unique bullet points based on the title words
+        # Instead of using the same default bullets for everything
+        title_words_set = set(words)
+        
+        if len(title_words_set) >= 2:
+            # Create somewhat relevant bullet points based on title words
+            return [
+                f"Analysis shows significant impact of {words[0] if words else 'topic'} on overall outcomes",
+                f"Key factors influencing {' '.join(words[:2]) if len(words) >= 2 else 'results'} include resource allocation and planning",
+                f"Experts recommend structured approach to {words[-1] if words else 'implementation'}",
+                f"Recent studies highlight importance of measuring {words[0] if words else 'metrics'} regularly",
+                f"Long-term success depends on adaptation and continuous improvement"
+            ]
+        else:
+            # Only if we can't extract anything useful from the title
+            return [
+                "Comprehensive analysis reveals key insights and actionable information",
+                "Strategic planning improves execution efficiency by up to 35%",
+                "Systematic measurement identifies optimization opportunities",
+                "Integration of feedback mechanisms enhances overall effectiveness",
+                "Continuous evaluation drives sustained improvements over time"
+            ]
 
 
 def create_physics_presentation():
@@ -1483,15 +1555,70 @@ def generate_presentation_from_text(text, model=None, title=None, tone="professi
                     if any(indicator in lower_bullet for indicator in placeholder_indicators):
                         has_placeholders = True
                         break
-                        
-            # If placeholders still found, replace with more specific content
+                          # If placeholders still found, replace with more specific content
             if has_placeholders or not slide.get('bullets') or len(slide.get('bullets', [])) < 3:
-                slide['bullets'] = generate_bullet_points_from_title(slide['title'])
-          # Convert the slides data to the format expected by create_presentation
-        for slide in enhanced_slides:
+                # Generate more targeted bullet points based on both slide title and presentation title
+                slide_title = slide.get('title', '')
+                presentation_title = main_title if main_title else "Presentation"
+                
+                # Generate more contextual bullet points by combining main title with slide title
+                combined_title = f"{presentation_title} - {slide_title}"
+                slide['bullets'] = generate_bullet_points_from_title(combined_title)# Convert the slides data to the format expected by create_presentation
+        used_bullet_points = set()  # Track bullet points to avoid duplicates
+        
+        for i, slide in enumerate(enhanced_slides):
+            # Get the bullet points for this slide
+            bullet_points = slide.get('bullets', [])
+            
+            # Check for duplicate bullet points across slides
+            if bullet_points:
+                # Convert bullets to tuple for hashing and check if all bullets already used elsewhere
+                bullets_tuple = tuple(bullet_points)
+                if bullets_tuple in used_bullet_points:
+                    # Generate new unique bullet points based on slide title and position
+                    new_bullets = []
+                    slide_title = slide['title']
+                    
+                    # Generate more specific bullet points based on slide title and position
+                    if i == 0:  # Introduction slide
+                        new_bullets = [
+                            f"This presentation examines key aspects of {slide_title}",
+                            f"Understanding {slide_title} is critical for organizational success",
+                            f"Research shows significant impact of {slide_title} on outcomes",
+                            f"We'll explore practical strategies for addressing {slide_title}",
+                            f"Recent data highlights the importance of this topic"
+                        ]
+                    elif i == len(enhanced_slides) - 1:  # Conclusion slide
+                        new_bullets = [
+                            f"Key takeaways include the importance of {slide_title}",
+                            f"Implementing these strategies can lead to significant improvements",
+                            f"Regular measurement and adjustment optimizes results",
+                            f"Next steps include developing an action plan with stakeholders",
+                            f"Success requires ongoing commitment and evaluation"
+                        ]
+                    else:  # Content slides
+                        new_bullets = [
+                            f"{slide_title} requires careful consideration and planning",
+                            f"Effective approaches to {slide_title} include systematic analysis",
+                            f"Case studies demonstrate successful implementation strategies",
+                            f"Measurement frameworks help quantify impact and progress",
+                            f"Best practices emphasize stakeholder involvement and communication"
+                        ]
+                    
+                    # Vary bullet points based on position to increase uniqueness
+                    for j in range(len(new_bullets)):
+                        if j < len(new_bullets):
+                            new_bullets[j] = f"{new_bullets[j]} (Section {i+1})"
+                    
+                    bullet_points = new_bullets
+                
+                # Add these bullets to our tracking set
+                used_bullet_points.add(bullets_tuple)
+            
+            # Add the slide to the content data
             content_data['slides'].append({
                 'title': slide['title'],
-                'points': slide.get('bullets', [])
+                'points': bullet_points
             })
         
         # Final validation - ensure we have actual slides with content

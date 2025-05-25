@@ -4,6 +4,13 @@ import firebase_admin
 import time
 import traceback
 
+def check_firebase_initialized():
+    """Check if Firebase is properly initialized"""
+    if not firebase_admin._apps:
+        print("ERROR: Firebase Admin SDK is not initialized!")
+        return False
+    return True
+
 def handle_google_authentication(id_token, referral_code=None):
     """
     Handles Google Authentication in a consistent way across the application.
@@ -16,8 +23,7 @@ def handle_google_authentication(id_token, referral_code=None):
         tuple: (response_json, status_code)
     """
     # First check if Firebase is properly initialized
-    if not firebase_admin._apps:
-        print("ERROR: Firebase Admin SDK is not initialized!")
+    if not check_firebase_initialized():
         return jsonify({
             'error': 'Authentication service unavailable. The server is not properly configured.',
             'redirect': url_for('auth_error', type='service_unavailable', 
@@ -31,16 +37,17 @@ def handle_google_authentication(id_token, referral_code=None):
     try:
         # Print debug info
         print(f"Verifying Google authentication token (length: {len(id_token)})")
-          # Verify the ID token with Firebase - make sure it's a string, not bytes
+        
+        # Verify the ID token with Firebase - make sure it's a string, not bytes
         if isinstance(id_token, bytes):
             id_token = id_token.decode('utf-8')
             
         # Check for a valid token format (basic validation)
-        if not id_token.count('.') == 2:
-            print(f"Invalid token format: does not contain exactly two '.' characters")
+        if id_token.count('.') != 2:
+            print("Invalid token format: does not contain exactly two '.' characters")
             return jsonify({'error': 'Invalid token format'}), 400
-              # Add a timeout for token verification to prevent hanging
-        import time
+        
+        # Add a timeout for token verification to prevent hanging
         start_time = time.time()
         
         try:
@@ -93,10 +100,12 @@ def handle_google_authentication(id_token, referral_code=None):
                     'plan': 'free'
                 })
                 is_new_user = True
-                print(f"New user record created in Firestore")
+                print("New user record created in Firestore")
             except Exception as user_create_error:
                 print(f"Error creating new user record: {user_create_error}")
-                return jsonify({'error': f'Failed to create user account: {str(user_create_error)}'}), 500        # Set session data
+                return jsonify({'error': f'Failed to create user account: {str(user_create_error)}'}), 500
+                
+        # Set session data
         try:
             # Make session permanent but with a specified lifetime
             from datetime import timedelta
@@ -150,3 +159,146 @@ def handle_google_authentication(id_token, referral_code=None):
             }), 503
             
         return jsonify({'error': str(e)}), 400
+
+def create_user_with_email_password(email, password, display_name=None):
+    """
+    Creates a new user with email and password in Firebase
+    
+    Args:
+        email (str): User's email
+        password (str): User's password
+        display_name (str, optional): User's display name
+        
+    Returns:
+        tuple: (user_record, None) if successful, (None, error_message) if failed
+    """
+    try:
+        # First check if Firebase is properly initialized
+        if not check_firebase_initialized():
+            return None, "Authentication service unavailable"
+        
+        # Create the user in Firebase Auth
+        user_properties = {
+            'email': email,
+            'password': password,
+            'email_verified': False
+        }
+        
+        if display_name:
+            user_properties['display_name'] = display_name
+            
+        user_record = auth.create_user(**user_properties)
+        
+        # Create user record in Firestore
+        try:
+            from firebase_admin import firestore
+            
+            firestore.client().collection('users').document(user_record.uid).set({
+                'email': email,
+                'display_name': display_name or '',
+                'created_at': firestore.SERVER_TIMESTAMP,
+                'plan': 'free',
+                'email_verified': False
+            })
+            
+        except Exception as db_error:
+            print(f"Error creating user record in Firestore: {db_error}")
+            # We don't fail the user creation if only the Firestore record fails
+        
+        # Send verification email
+        # Note: We can't do this from server - it must be done from client
+        
+        return user_record, None
+        
+    except auth.EmailAlreadyExistsError:
+        return None, "Email already in use"
+    except auth.InvalidEmailError:
+        return None, "Invalid email address"
+    except auth.WeakPasswordError:
+        return None, "Password is too weak"
+    except Exception as e:
+        print(f"Error creating user: {e}")
+        return None, str(e)
+
+def verify_id_token(id_token):
+    """
+    Verify Firebase ID token
+    
+    Args:
+        id_token (str): Firebase ID token
+        
+    Returns:
+        tuple: (decoded_token, None) if successful, (None, error_message) if failed
+    """
+    try:
+        # Verify the ID token
+        decoded_token = auth.verify_id_token(id_token)
+        return decoded_token, None
+    except auth.ExpiredIdTokenError:
+        return None, "Token expired. Please sign in again."
+    except auth.RevokedIdTokenError:
+        return None, "Token revoked. Please sign in again."
+    except auth.InvalidIdTokenError:
+        return None, "Invalid token. Please sign in again."
+    except Exception as e:
+        print(f"Token verification error: {e}")
+        return None, str(e)
+
+def revoke_user_tokens(user_id, token=None):
+    """
+    Revokes all refresh tokens for a user, ensuring they're properly logged out.
+    If a token is provided, it will be used to get the user ID if user_id is not provided.
+    
+    Args:
+        user_id (str): The Firebase user ID
+        token (str, optional): A Firebase ID token that can be used to get the user ID
+        
+    Returns:
+        bool: True if successful, False otherwise
+    """
+    if not check_firebase_initialized():
+        print("ERROR: Firebase Admin SDK is not initialized, cannot revoke tokens!")
+        return False
+    
+    try:
+        # If token is provided but user_id is not, get user_id from token
+        if token and not user_id:
+            try:
+                decoded_token = auth.verify_id_token(token)
+                user_id = decoded_token['uid']
+                print(f"Successfully decoded token to get user ID: {user_id}")
+            except Exception as token_error:
+                print(f"Error decoding token: {token_error}")
+                return False
+        
+        if not user_id:
+            print("ERROR: No user ID provided for token revocation")
+            return False
+        
+        # Get user details to log email for debugging
+        try:
+            user = auth.get_user(user_id)
+            print(f"Revoking tokens for user: {user.email} (UID: {user_id})")
+        except Exception as user_error:
+            print(f"Could not get user info for {user_id}: {user_error}")
+            # Continue anyway since we have the UID
+        
+        # Revoke all tokens for this user
+        auth.revoke_refresh_tokens(user_id)
+        print(f"Successfully revoked all refresh tokens for user {user_id}")
+        
+        # Set user custom claims to indicate revoked status
+        try:
+            current_claims = auth.get_user(user_id).custom_claims or {}
+            current_claims['tokens_revoked_at'] = int(time.time())
+            auth.set_custom_user_claims(user_id, current_claims)
+            print(f"Set token revocation timestamp in user claims for {user_id}")
+        except Exception as claims_error:
+            print(f"Warning: Could not set revocation timestamp in claims: {claims_error}")
+        
+        return True
+    except Exception as revoke_error:
+        print(f"Error revoking tokens: {revoke_error}")
+        traceback_str = traceback.format_exc()
+        print(f"Traceback: {traceback_str}")
+        return False

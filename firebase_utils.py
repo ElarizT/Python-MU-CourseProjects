@@ -864,33 +864,104 @@ def get_user_files(user_id, limit=50):
     Returns:
         list: List of file metadata
     """
+    print(f"DEBUG: get_user_files called for user_id: {user_id}")
     try:
+        # Check if Firebase is available
+        if not is_firebase_available():
+            print(f"DEBUG: Firebase not available when fetching files for user: {user_id}")
+            return []
+            
         # Get files from Firestore
+        print(f"DEBUG: Querying Firestore for files with user_id: {user_id}")
+        
+        # FIXED: Query from 'files' collection AND 'user_files' collection (both are used in uploads)
+        # Some files are saved in 'files' collection
         files_ref = db.collection('files').where('user_id', '==', user_id).limit(limit)
         
         # Get all files and add download URLs
         files = []
+        doc_count = 0
+        
+        # First get files from 'files' collection
         for doc in files_ref.stream():
+            doc_count += 1
             file_metadata = doc.to_dict()
             file_metadata['file_id'] = doc.id
+            
+            print(f"DEBUG: Found file document with ID: {doc.id} in 'files' collection")
             
             # Get the download URL
             storage_path = file_metadata.get('storage_path')
             if storage_path:
+                print(f"DEBUG: Getting download URL for storage path: {storage_path}")
                 bucket = storage.bucket()
                 blob = bucket.blob(storage_path)
                 
-                # Create a download URL that expires in 7 days (604800 seconds)
-                download_url = blob.generate_signed_url(
-                    expiration=datetime.now() + timedelta(days=7),
-                    method="GET"
-                )
-                
-                file_metadata['download_url'] = download_url
+                try:
+                    if not blob.exists():
+                        print(f"DEBUG: Blob does not exist at path: {storage_path}")
+                        continue
+                    
+                    # Create a download URL that expires in 7 days (604800 seconds)
+                    download_url = blob.generate_signed_url(
+                        expiration=datetime.now() + timedelta(days=7),
+                        method="GET"
+                    )
+                    
+                    file_metadata['download_url'] = download_url
+                    file_metadata['name'] = file_metadata.get('filename', 'Unknown file name')
+                except Exception as blob_error:
+                    print(f"DEBUG: Error getting blob URL: {blob_error}")
+                    continue
+            else:
+                print(f"DEBUG: No storage path found for file ID: {doc.id}")
+                continue
             
             files.append(file_metadata)
         
+        # FIXED: Also check in 'user_files' collection where some files might be stored
+        user_files_ref = db.collection('user_files').where('user_id', '==', user_id).limit(limit)
+        for doc in user_files_ref.stream():
+            doc_count += 1
+            file_metadata = doc.to_dict()
+            file_metadata['file_id'] = doc.id
+            
+            print(f"DEBUG: Found file document with ID: {doc.id} in 'user_files' collection")
+            
+            # Get the download URL
+            storage_path = file_metadata.get('storage_path')
+            download_url = file_metadata.get('download_url')
+            
+            if storage_path and not download_url:
+                print(f"DEBUG: Getting download URL for storage path: {storage_path}")
+                bucket = storage.bucket()
+                blob = bucket.blob(storage_path)
+                
+                try:
+                    if not blob.exists():
+                        print(f"DEBUG: Blob does not exist at path: {storage_path}")
+                        continue
+                    
+                    # Create a download URL that expires in 7 days (604800 seconds)
+                    download_url = blob.generate_signed_url(
+                        expiration=datetime.now() + timedelta(days=7),
+                        method="GET"
+                    )
+                    
+                    file_metadata['download_url'] = download_url
+                except Exception as blob_error:
+                    print(f"DEBUG: Error getting blob URL: {blob_error}")
+                    continue
+            
+            # Set name for display
+            file_metadata['name'] = file_metadata.get('filename', 'Unknown file name')
+            
+            files.append(file_metadata)
+        
+        print(f"DEBUG: Found {doc_count} documents, returning {len(files)} valid files")
         return files
     except Exception as e:
         print(f"Error getting user files: {e}")
+        import traceback
+        traceback.print_exc()
         return []

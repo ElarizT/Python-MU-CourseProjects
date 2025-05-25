@@ -1,0 +1,36 @@
+{% extends "layout.html" %}
+
+{% block title %}{{ g.translations.feedback_title }}{% endblock %}
+
+{% block additional_styles %}
+/* Make feedback placeholder text visible: dark gray */
+#feedbackInput::placeholder { color: #6c757d; }
+#feedbackInput::-webkit-input-placeholder { color: #6c757d; }
+#feedbackInput::-moz-placeholder { color: #6c757d; }
+#feedbackInput:-ms-input-placeholder { color: #6c757d; }
+#feedbackInput:-moz-placeholder { color: #6c757d; }
+/* Make user-entered feedback text white */
+#feedbackInput { color: #fff; }
+{% endblock %}
+
+{% block content %}
+<div class="row">
+  <div class="col-md-8 mx-auto">
+    <h2>{{ g.translations.feedback_title }}</h2>
+    <p>{{ g.translations.feedback_desc }}</p>
+    {% with messages = get_flashed_messages(with_categories=true) %}
+      {% if messages %}
+        {% for category, message in messages %}
+          <div class="alert alert-{{ category }}" role="alert">{{ message }}</div>
+        {% endfor %}
+      {% endif %}
+    {% endwith %}
+    <form method="post">
+      <div class="mb-3">
+        <textarea id="feedbackInput" name="feedback" class="form-control" rows="6" placeholder="{{ g.translations.feedback_placeholder }}"></textarea>
+      </div>
+      <button type="submit" class="btn btn-primary">{{ g.translations.feedback_submit }}</button>
+    </form>
+  </div>
+</div>
+{% endblock %}

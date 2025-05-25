@@ -1,0 +1,322 @@
+{% extends "base.html" %}
+{% block title %}Data Transformation{% endblock %}
+
+{% block additional_styles %}
+.transform-card {
+    background: rgba(36, 40, 80, 0.7);
+    border: 1px solid rgba(99, 102, 241, 0.2);
+    border-radius: 24px;
+    box-shadow: 0 15px 35px rgba(0, 0, 0, 0.25);
+    backdrop-filter: blur(12px);
+    -webkit-backdrop-filter: blur(12px);
+    overflow: hidden;
+    transition: all 0.4s ease;
+    position: relative;
+}
+
+.transform-card:hover {
+    box-shadow: 0 20px 40px rgba(99, 102, 241, 0.3);
+    transform: translateY(-5px);
+}
+
+.transform-card::before {
+    content: '';
+    position: absolute;
+    top: -2px;
+    left: -2px;
+    right: -2px;
+    bottom: -2px;
+    background: linear-gradient(45deg, #6366f1, #06b6d4, #6366f1, #06b6d4);
+    background-size: 400% 400%;
+    z-index: -1;
+    border-radius: 24px;
+    animation: gradient-border 8s ease infinite;
+    opacity: 0.5;
+}
+
+@keyframes gradient-border {
+    0% {
+        background-position: 0% 50%;
+    }
+    50% {
+        background-position: 100% 50%;
+    }
+    100% {
+        background-position: 0% 50%;
+    }
+}
+
+.form-label {
+    font-weight: 600;
+    margin-bottom: 0.5rem;
+    font-size: 1rem;
+    color: #e0e7ff;
+}
+
+.instructions-textarea {
+    min-height: 150px;
+    resize: vertical;
+    border-radius: 12px;
+    border: 1px solid rgba(255, 255, 255, 0.1);
+    background-color: rgba(20, 24, 54, 0.7);
+    color: #e0e7ff;
+    font-family: 'Courier New', monospace;
+}
+
+.instructions-textarea:focus {
+    border-color: #6366f1;
+    box-shadow: 0 0 0 0.2rem rgba(99, 102, 241, 0.25);
+}
+
+.file-drop-zone {
+    border: 2px dashed rgba(99, 102, 241, 0.5);
+    border-radius: 12px;
+    padding: 2rem;
+    background-color: rgba(20, 24, 54, 0.4);
+    transition: all 0.3s ease;
+    text-align: center;
+}
+
+.file-drop-zone:hover, .file-drop-zone.dragover {
+    border-color: #6366f1;
+    background-color: rgba(20, 24, 54, 0.6);
+}
+
+.file-drop-zone i {
+    font-size: 3rem;
+    color: rgba(99, 102, 241, 0.7);
+    margin-bottom: 1rem;
+}
+
+.transform-submit-btn {
+    background: linear-gradient(135deg, #6366f1 0%, #06b6d4 100%);
+    border: none;
+    border-radius: 12px;
+    color: white;
+    padding: 0.75rem 1.5rem;
+    font-weight: 600;
+    letter-spacing: 0.5px;
+    box-shadow: 0 4px 12px rgba(99, 102, 241, 0.4);
+    transition: all 0.3s ease;
+}
+
+.transform-submit-btn:hover {
+    transform: translateY(-2px);
+    box-shadow: 0 6px 16px rgba(99, 102, 241, 0.6);
+    background: linear-gradient(135deg, #5153cc 0%, #0596ae 100%);
+}
+
+.transform-submit-btn:active {
+    transform: translateY(1px);
+}
+
+.instructions-guide {
+    background-color: rgba(20, 24, 54, 0.7);
+    border-radius: 12px;
+    padding: 1.5rem;
+    margin-top: 1.5rem;
+}
+
+.instructions-guide h5 {
+    color: #6366f1;
+    margin-bottom: 1rem;
+}
+
+.instructions-guide ul {
+    margin-bottom: 0;
+}
+
+.instructions-guide ul li {
+    margin-bottom: 0.5rem;
+    color: #e0e7ff;
+}
+
+.error-details {
+    background-color: rgba(220, 53, 69, 0.1);
+    border-left: 4px solid #dc3545;
+    padding: 1rem;
+    border-radius: 4px;
+    margin-top: 1rem;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    white-space: pre-wrap;
+    color: #ffb0b9;
+}
+
+.code-block {
+    background-color: rgba(20, 24, 54, 0.9);
+    border-radius: 8px;
+    padding: 1rem;
+    margin-top: 1rem;
+    overflow-x: auto;
+    font-family: 'Courier New', monospace;
+    font-size: 0.9rem;
+    border: 1px solid rgba(99, 102, 241, 0.3);
+    color: #e0e7ff;
+}
+
+.supported-formats {
+    font-size: 0.9rem;
+    color: #a3a8c3;
+    margin-top: 0.5rem;
+}
+
+{% endblock %}
+
+{% block content %}
+<div class="container py-4">
+    <div class="row mb-4">
+        <div class="col-12">
+            <h1 class="text-center mb-2">Data Transformation</h1>
+            <p class="text-center text-muted">Transform CSV and Excel files using natural language instructions</p>
+        </div>
+    </div>
+
+    <div class="row justify-content-center">
+        <div class="col-12 col-lg-10">
+            <div class="transform-card p-4">
+                {% if error %}
+                <div class="alert alert-danger">
+                    <strong>Error:</strong> {{ error }}
+                    {% if code %}
+                    <div class="mt-3">
+                        <p><strong>Generated code (with error):</strong></p>
+                        <div class="code-block">{{ code }}</div>
+                    </div>
+                    {% endif %}
+                </div>
+                {% endif %}
+                
+                <form action="{{ url_for('transform_data') }}" method="POST" enctype="multipart/form-data" id="transformForm">
+                    <div class="mb-4">
+                        <label for="file" class="form-label">Upload CSV or Excel File</label>
+                        <div class="file-drop-zone" id="dropZone">
+                            <i class="fas fa-file-upload"></i>
+                            <h5>Drop your file here or click to browse</h5>
+                            <p class="text-muted">Supported formats: CSV, Excel (.xlsx, .xls)</p>
+                            <input type="file" id="file" name="file" class="d-none" accept=".csv,.xlsx,.xls">
+                            <div id="fileInfo" class="mt-3 d-none">
+                                <p class="mb-1"><strong>Selected file:</strong> <span id="fileName"></span></p>
+                                <button type="button" class="btn btn-sm btn-outline-danger" id="removeFile">Remove</button>
+                            </div>
+                        </div>
+                        <p class="supported-formats">Maximum file size: 10MB</p>
+                    </div>
+
+                    <div class="mb-4">
+                        <label for="instructions" class="form-label">Transformation Instructions</label>
+                        <textarea id="instructions" name="instructions" class="form-control instructions-textarea" placeholder="Describe how you want to transform the data...">{{ instructions|default('') }}</textarea>
+                    </div>
+
+                    <div class="text-center">
+                        <button type="submit" class="btn transform-submit-btn">
+                            <i class="fas fa-magic me-2"></i>Transform Data
+                        </button>
+                    </div>
+                </form>
+
+                <div class="instructions-guide">
+                    <h5><i class="fas fa-lightbulb me-2"></i>Example Instructions</h5>
+                    <ul>
+                        <li>Filter rows where sales > 1000 and sort by date descending</li>
+                        <li>Add a new column called "profit" calculated as revenue minus cost</li>
+                        <li>Group by category and calculate average price per category</li>
+                        <li>Remove duplicate rows based on customer ID</li>
+                        <li>Convert date columns to proper datetime format and extract month name</li>
+                        <li>Pivot the table to show products as columns and regions as rows</li>
+                        <li>Replace missing values with the mean of each column</li>
+                    </ul>
+                </div>
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const dropZone = document.getElementById('dropZone');
+        const fileInput = document.getElementById('file');
+        const fileInfo = document.getElementById('fileInfo');
+        const fileName = document.getElementById('fileName');
+        const removeFileBtn = document.getElementById('removeFile');
+        const transformForm = document.getElementById('transformForm');
+
+        // Handle file selection via click
+        dropZone.addEventListener('click', function() {
+            fileInput.click();
+        });
+
+        // Handle file selection change
+        fileInput.addEventListener('change', function() {
+            handleFiles(this.files);
+        });
+
+        // Handle drag and drop
+        dropZone.addEventListener('dragover', function(e) {
+            e.preventDefault();
+            dropZone.classList.add('dragover');
+        });
+
+        dropZone.addEventListener('dragleave', function() {
+            dropZone.classList.remove('dragover');
+        });
+
+        dropZone.addEventListener('drop', function(e) {
+            e.preventDefault();
+            dropZone.classList.remove('dragover');
+            handleFiles(e.dataTransfer.files);
+        });
+
+        // Handle remove file button
+        removeFileBtn.addEventListener('click', function(e) {
+            e.preventDefault();
+            fileInput.value = '';
+            fileInfo.classList.add('d-none');
+            fileName.textContent = '';
+        });
+
+        // Form submission validation
+        transformForm.addEventListener('submit', function(e) {
+            const fileSelected = fileInput.files.length > 0;
+            const instructionsProvided = document.getElementById('instructions').value.trim() !== '';
+
+            if (!fileSelected || !instructionsProvided) {
+                e.preventDefault();
+                if (!fileSelected) {
+                    alert('Please select a file to transform.');
+                } else if (!instructionsProvided) {
+                    alert('Please provide transformation instructions.');
+                }
+            }
+        });
+
+        function handleFiles(files) {
+            if (files.length > 0) {
+                const file = files[0];
+                // Check file type
+                const validTypes = ['.csv', '.xlsx', '.xls', 'text/csv', 'application/vnd.ms-excel', 
+                                  'application/vnd.openxmlformats-officedocument.spreadsheetml.sheet'];
+                const fileType = file.type;
+                const fileExt = file.name.split('.').pop().toLowerCase();
+                
+                if (validTypes.includes(fileType) || validTypes.includes(`.${fileExt}`)) {
+                    // Check file size (10MB max)
+                    if (file.size <= 10 * 1024 * 1024) {
+                        // Display file info
+                        fileName.textContent = file.name;
+                        fileInfo.classList.remove('d-none');
+                    } else {
+                        alert('File is too large. Maximum size is 10MB.');
+                        fileInput.value = '';
+                    }
+                } else {
+                    alert('Invalid file type. Please select a CSV or Excel file.');
+                    fileInput.value = '';
+                }
+            }
+        }
+    });
+</script>
+{% endblock %}

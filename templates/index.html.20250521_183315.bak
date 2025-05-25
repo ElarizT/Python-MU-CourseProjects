@@ -1,0 +1,205 @@
+{% extends "layout.html" %}
+
+{% block title %}LightYearAI - Advanced AI Assistant{% endblock %}
+
+{% block head_scripts %}
+{% if is_homepage %}
+<!-- Inline homepage loading fix that runs immediately -->
+<script>
+    (function() {
+        console.log('Inline homepage loading fix running immediately');
+        
+        // PART 1: Add CSS rules to completely hide loading elements
+        document.write('<style id="homepage-loading-fix-style">#global-loading-overlay, .loading-overlay {display: none !important; opacity: 0 !important; visibility: hidden !important;}</style>');
+        
+        // PART 2: Function to hide any loading elements
+        function hideAllLoadingElements() {
+            console.log('Hiding all loading elements');
+            var elements = document.querySelectorAll('#global-loading-overlay, .loading-overlay');
+            if (elements && elements.length > 0) {
+                for (var i = 0; i < elements.length; i++) {
+                    elements[i].style.display = 'none';
+                    elements[i].style.opacity = '0';
+                    elements[i].style.visibility = 'hidden';
+                }
+            }
+            
+            // Also use LoadingManager API if available
+            if (window.LoadingManager) {
+                window.LoadingManager.hideLoading();
+            }
+        }
+        
+        // Run immediately
+        hideAllLoadingElements();
+        
+        // Also run when DOM is ready
+        document.addEventListener('DOMContentLoaded', hideAllLoadingElements);
+        
+        // And when window is fully loaded
+        window.addEventListener('load', hideAllLoadingElements);
+        
+        // Repeatedly check during the first few seconds
+        var count = 0;
+        var interval = setInterval(function() {
+            hideAllLoadingElements();
+            count++;
+            if (count >= 10) clearInterval(interval);
+        }, 200);
+    })();
+</script>
+{% endif %}
+
+<script src="/static/js/ultimate-homepage-fix.js"></script>
+
+<script>
+    // Check for dark mode preference
+    function checkDarkMode() {
+        if (localStorage.getItem('darkMode') === 'enabled' || 
+            (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches && 
+             localStorage.getItem('darkMode') !== 'disabled')) {
+            document.body.classList.add('dark-mode');
+        }
+    }
+    
+    // Run on page load
+    document.addEventListener('DOMContentLoaded', checkDarkMode);
+</script>
+{% endblock %}
+
+{% block additional_styles %}
+<link rel="stylesheet" href="/static/css/landing-page.css">
+<!-- Any custom styles that were in the HTML are now moved to landing-page.css -->
+{% endblock %}
+
+{% block content %}
+<div class="landing-page">
+    <!-- Hero Section -->
+    <section class="hero">
+        <div class="container hero-container">
+            <h1 data-typed="Meet LightYearAI">Meet LightYearAI</h1>
+            <p class="lead">LightYearAI is a next generation AI assistant built to be safe, accurate, and secure to help you do your best work.</p>
+            
+            <div class="hero-buttons">
+                <a href="/signup" class="btn btn-primary-gradient">Get started</a>
+                <a href="#features" class="btn btn-outline">Explore features</a>
+            </div>
+        </div>    </section>
+    
+    <!-- Features Section -->
+    <section class="features" id="features">
+        <div class="container">
+            <div class="section-title">
+                <h2>Create with LightYearAI</h2>
+                <p>Draft and iterate on websites, graphics, documents, and code alongside your chat with Artifacts.</p>
+            </div>
+            
+            <div class="row g-4">
+                <div class="col-lg-4 col-md-6">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-book"></i>
+                        </div>
+                        <h3>Study Buddy</h3>
+                        <p>Get help with your studies, research topics, and learn new concepts with our intelligent AI tutor.</p>
+                        <a href="/study" class="btn btn-primary">Start studying</a>
+                    </div>
+                </div>
+                
+                <div class="col-lg-4 col-md-6">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-spell-check"></i>
+                        </div>
+                        <h3>Proofreading</h3>
+                        <p>Polish your writing with advanced grammar and style suggestions to make your content shine.</p>
+                        <a href="/proofread" class="btn btn-primary">Proofread document</a>
+                    </div>
+                </div>
+                
+                <div class="col-lg-4 col-md-6">
+                    <div class="feature-card">
+                        <div class="feature-icon">
+                            <i class="fas fa-film"></i>
+                        </div>
+                        <h3>Entertainment</h3>
+                        <p>Engage in creative conversations, get recommendations, and enjoy fun interactions with our AI.</p>
+                        <a href="/entertainment" class="btn btn-primary">Start chatting</a>
+                    </div>
+                </div>
+            </div>        </div>
+    </section>
+    
+    <!-- Feature Highlight Section -->
+    <section class="feature-highlight">
+        <div class="container">
+            <div class="row align-items-center">
+                <div class="col-lg-6 mb-4 mb-lg-0">
+                    <h2>Bring your knowledge</h2>
+                    <p class="lead mb-4">LightYearAI integrates with your existing knowledge base, making it smarter about your specific needs and preferences.</p>
+                    <ul class="list-unstyled">
+                        <li class="mb-3"><i class="fas fa-check-circle text-primary me-2"></i> Connect your data sources</li>
+                        <li class="mb-3"><i class="fas fa-check-circle text-primary me-2"></i> Import documents and files</li>
+                        <li class="mb-3"><i class="fas fa-check-circle text-primary me-2"></i> Train on your specific needs</li>
+                    </ul>
+                    <a href="/connect" class="btn btn-primary-gradient mt-3">Connect now</a>
+                </div>                <div class="col-lg-6">
+                    <img src="/static/images/feature-knowledge.jpg" alt="Knowledge Integration" class="demo-image" onerror="if(this.src.indexOf('placeholder') === -1) this.src='/static/images/feature-placeholder.jpg'; else this.onerror=null;">
+                </div>
+            </div>        </div>
+    </section>
+    
+    <!-- How It Works Section -->
+    <section class="how-it-works">
+        <div class="container">
+            <div class="section-title">
+                <h2>Share and collaborate with your team</h2>
+                <p>LightYearAI makes it easy to work together with your team members for maximum productivity.</p>
+            </div>
+            
+            <div class="row g-4">
+                <div class="col-lg-4 col-md-6">
+                    <div class="step-card">
+                        <div class="step-number">1</div>
+                        <h3>Sign Up</h3>
+                        <p>Create your account in seconds and get instant access to all features.</p>
+                        <div class="mt-4">
+                            <i class="fas fa-user-plus fa-2x text-primary opacity-50"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-lg-4 col-md-6">
+                    <div class="step-card">
+                        <div class="step-number">2</div>
+                        <h3>Choose Your Tool</h3>
+                        <p>Select from our range of AI-powered tools designed to solve specific problems.</p>
+                        <div class="mt-4">
+                            <i class="fas fa-tools fa-2x text-primary opacity-50"></i>
+                        </div>
+                    </div>
+                </div>
+                
+                <div class="col-lg-4 col-md-6">
+                    <div class="step-card">
+                        <div class="step-number">3</div>
+                        <h3>Get Results</h3>
+                        <p>Receive intelligent responses and solutions tailored to your needs.</p>
+                        <div class="mt-4">
+                            <i class="fas fa-check-circle fa-2x text-primary opacity-50"></i>
+                        </div>
+                    </div>
+                </div>
+            </div>        </div>
+    </section>
+      <!-- CTA Section -->
+    <section class="cta">
+        <div class="container">
+            <h2>Ready to unlock the potential of Agentic AI? LightYearAI is poised to revolutionize your workflow.</h2>
+            <button id="getStartedBtn" class="btn btn-light btn-lg">Get Started Today</button>
+        </div>    </section>
+</div>
+
+<script src="/static/js/landing-page.js"></script>
+<script src="/static/js/index-page.js"></script>
+{% endblock %}

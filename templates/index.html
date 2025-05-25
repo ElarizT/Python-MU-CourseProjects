@@ -3,8 +3,57 @@
 {% block title %}LightYearAI - Advanced AI Assistant{% endblock %}
 
 {% block head_scripts %}
+{% if is_homepage %}
+<!-- Inline homepage loading fix that runs immediately -->
 <script>
-    // Check for dark mode preference
+    (function() {
+        console.log('Inline homepage loading fix running immediately');
+        
+        // PART 1: Add CSS rules to completely hide loading elements
+        document.write(\'<style id="homepage-loading-fix-style">#global-loading-overlay, .loading-overlay {display: none !important; opacity: 0 !important; visibility: hidden !important;}</style>\');
+        
+        
+        // PART 2: Function to hide any loading elements
+        function hideAllLoadingElements() {
+            console.log('Hiding all loading elements');
+            var elements = document.querySelectorAll('#global-loading-overlay, .loading-overlay');
+            if (elements && elements.length > 0) {
+                for (var i = 0; i < elements.length; i++) {
+                    elements[i].style.display = 'none';
+                    elements[i].style.opacity = '0';
+                    elements[i].style.visibility = 'hidden';
+                }
+            }
+
+            // Also use LoadingManager API if available
+            if (window.LoadingManager) {
+                window.LoadingManager.hideLoading();
+            }
+        }
+
+        // Run immediately
+        hideAllLoadingElements();
+        
+        // Also run when DOM is ready
+        document.addEventListener('DOMContentLoaded', hideAllLoadingElements);
+        
+        // And when window is fully loaded
+        window.addEventListener('load', hideAllLoadingElements);
+        
+        // Repeatedly check during the first few seconds
+        var count = 0;
+        var interval = setInterval(function() {
+            hideAllLoadingElements();
+            count++;
+            if (count >= 10) clearInterval(interval);
+        }, 200);
+    })();
+</script>
+{% endif %}
+
+<script src="/static/js/ultimate-homepage-fix.js"></script>
+
+<script>    // Check for dark mode preference
     function checkDarkMode() {
         if (localStorage.getItem('darkMode') === 'enabled' || 
             (window.matchMedia && window.matchMedia('(prefers-color-scheme: dark)').matches && 
@@ -12,7 +61,7 @@
             document.body.classList.add('dark-mode');
         }
     }
-    
+
     // Run on page load
     document.addEventListener('DOMContentLoaded', checkDarkMode);
 </script>
@@ -94,9 +143,8 @@
                         <li class="mb-3"><i class="fas fa-check-circle text-primary me-2"></i> Train on your specific needs</li>
                     </ul>
                     <a href="/connect" class="btn btn-primary-gradient mt-3">Connect now</a>
-                </div>
-                <div class="col-lg-6">
-                    <img src="/static/images/feature-knowledge.jpg" alt="Knowledge Integration" class="demo-image" onerror="this.src='/static/images/feature-placeholder.jpg'">
+                </div>                <div class="col-lg-6">
+                    <img src="/static/images/feature-knowledge.jpg" alt="Knowledge Integration" class="demo-image" onerror="if(this.src.indexOf('placeholder') === -1) this.src='/static/images/feature-placeholder.jpg'; else this.onerror=null;">
                 </div>
             </div>        </div>
     </section>
@@ -144,16 +192,14 @@
                 </div>
             </div>        </div>
     </section>
-    
-    <!-- CTA Section -->
+      <!-- CTA Section -->
     <section class="cta">
         <div class="container">
-            <h2>Ready to experience the future of AI assistance?</h2>
-            <p>Join thousands of satisfied users who are already enhancing their productivity with LightYearAI.</p>
-            <a href="/signup" class="btn btn-light btn-lg">Get Started Today</a>
-        </div>
-    </section>
+            <h2>Ready to unlock the potential of Agentic AI? LightYearAI is poised to revolutionize your workflow.</h2>
+            <button id="getStartedBtn" class="btn btn-light btn-lg">Get Started Today</button>
+        </div>    </section>
 </div>
 
 <script src="/static/js/landing-page.js"></script>
+<script src="/static/js/index-page.js"></script>
 {% endblock %}

@@ -1,0 +1,94 @@
+<!-- templates/settings_modal.html -->
+<div class="modal fade" id="settingsModal" tabindex="-1" aria-labelledby="settingsModalLabel" aria-hidden="true">
+  <div class="modal-dialog modal-xl modal-dialog-centered">
+    <div class="modal-content bg-dark text-white rounded">
+      <div class="modal-header border-0">
+        <h5 class="modal-title" id="settingsModalLabel">Settings</h5>
+        <button type="button" class="btn-close btn-close-white" data-bs-dismiss="modal" aria-label="Close"></button>
+      </div>
+      <div class="modal-body">
+        <div class="row">
+          <nav class="col-3 nav flex-column nav-pills me-3" role="tablist">
+            <button class="nav-link active" id="tab-general" data-bs-toggle="pill" data-bs-target="#pane-general" type="button">General</button>
+            <button class="nav-link" id="tab-account" data-bs-toggle="pill" data-bs-target="#pane-account" type="button">Account</button>
+            <button class="nav-link" id="tab-referral" data-bs-toggle="pill" data-bs-target="#pane-referral" type="button">Referral Program</button>
+            <button class="nav-link" id="tab-notifications" data-bs-toggle="pill" data-bs-target="#pane-notifications" type="button">Notifications</button>
+            <button class="nav-link" id="tab-personalization" data-bs-toggle="pill" data-bs-target="#pane-personalization" type="button">Personalization</button>
+            <button class="nav-link" id="tab-speech" data-bs-toggle="pill" data-bs-target="#pane-speech" type="button">Speech</button>
+            <button class="nav-link" id="tab-data-controls" data-bs-toggle="pill" data-bs-target="#pane-data-controls" type="button">Data controls</button>
+            <button class="nav-link" id="tab-builder-profile" data-bs-toggle="pill" data-bs-target="#pane-builder-profile" type="button">Builder profile</button>
+            <button class="nav-link" id="tab-connected-apps" data-bs-toggle="pill" data-bs-target="#pane-connected-apps" type="button">Connected apps</button>
+            <button class="nav-link" id="tab-security" data-bs-toggle="pill" data-bs-target="#pane-security" type="button">Security</button>
+          </nav>
+          <div class="col-9 tab-content">
+            <div class="tab-pane fade show active" id="pane-general" role="tabpanel">
+              <!-- General settings UI -->
+              <h6>Theme</h6>
+              <select class="form-select mb-3">
+                <option selected>System</option>
+                <option>Light</option>
+                <option>Dark</option>
+              </select>
+              <div class="form-check">
+                <input class="form-check-input" type="checkbox" id="setting-show-code">
+                <label class="form-check-label" for="setting-show-code">Always show code when using data analyst</label>
+              </div>
+            </div>
+            <div class="tab-pane fade p-2" id="pane-account" role="tabpanel">
+              <!-- Subscription Status & Daily Token Usage -->
+              <h6>Subscription Status</h6>
+              <p>Plan: <strong>{{ g.plan_name|default('Free') }}</strong> <a href="/account" class="btn btn-sm btn-success ms-2">Upgrade to Premium</a></p>
+              <h6 class="mt-3">Daily Token Usage</h6>
+              <p>Used today: <span id="dailyTokens">{{ g.tokens_used|default(0) }}</span> / 25000 tokens</p>
+              <div class="progress">
+                <div class="progress-bar" role="progressbar" style="width: {{ (g.tokens_used or 0) / 25000 * 100 }}%;" aria-valuenow="{{ g.tokens_used }}" aria-valuemin="0" aria-valuemax="25000"></div>
+              </div>
+            </div>
+            <div class="tab-pane fade p-2" id="pane-referral" role="tabpanel">
+              <!-- Referral Program -->
+              <h6>Referral Program</h6>
+              <p>Invite friends and get rewarded! When someone signs up through your referral link and purchases a premium plan, you get 7 days of the same plan added to your account.</p>
+              <p><strong>How it works:</strong></p>
+              <ul>
+                <li>Share your unique referral link with friends</li>
+                <li>When they sign up and purchase any plan, you get 7 days of the same plan</li>
+              </ul>
+              <button class="btn btn-outline-light">Copy Referral Link</button>
+            </div>
+            <div class="tab-pane fade p-3" id="pane-notifications" role="tabpanel">
+              <!-- Notifications settings -->
+              <div class="form-check mb-2">
+                <input class="form-check-input" type="checkbox" id="notify-follow-ups" checked>
+                <label class="form-check-label" for="notify-follow-ups">Show follow up suggestions in chats</label>
+              </div>
+            </div>
+            <div class="tab-pane fade p-3" id="pane-personalization" role="tabpanel">
+              <!-- Personalization settings -->
+              <p>Personalization options here.</p>
+            </div>
+            <div class="tab-pane fade p-3" id="pane-speech" role="tabpanel">
+              <!-- Speech settings -->
+              <p>Speech options here.</p>
+            </div>
+            <div class="tab-pane fade p-3" id="pane-data-controls" role="tabpanel">
+              <!-- Data controls settings -->
+              <p>Data control options here.</p>
+            </div>
+            <div class="tab-pane fade p-3" id="pane-builder-profile" role="tabpanel">
+              <!-- Builder profile settings -->
+              <p>Builder profile options here.</p>
+            </div>
+            <div class="tab-pane fade p-3" id="pane-connected-apps" role="tabpanel">
+              <!-- Connected apps settings -->
+              <p>Connected apps options here.</p>
+            </div>
+            <div class="tab-pane fade p-3" id="pane-security" role="tabpanel">
+              <!-- Security settings -->
+              <p>Security options here.</p>
+            </div>
+          </div>
+        </div>
+      </div>
+    </div>
+  </div>
+</div>

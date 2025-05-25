@@ -10,37 +10,34 @@ Jinja2==3.1.2
 itsdangerous==2.1.2
 MarkupSafe==2.1.3
 click>=8.1.8
-blinker==1.6.2
+blinker>=1.9.0
 typing-extensions>=4.11.0,<5.0.0
 urllib3==2.0.7
 certifi==2023.7.22
 idna==3.4
 charset-normalizer==3.2.0
 requests==2.31.0
-tqdm==4.66.1
-protobuf==4.24.4
-numpy==1.26.0
+tqdm>=4.66.1
+protobuf>=4.24.4
+numpy>=1.26.0
 gunicorn==21.2.0
 html5lib==1.1
 python-docx==0.8.11
 firebase-admin
 google-cloud-storage>=2.10.0  # Required for Firebase Storage
 stripe==2.70.0
-tiktoken==0.5.2
+tiktoken>=0.5.2
 asyncio==3.4.3
 # Excel generation dependencies
 pandas>=2.0.0
 openpyxl>=3.1.2
 XlsxWriter>=3.1.0  # Added for enhanced chart visualization
 
-# CrewAI Multi-Agent System dependencies
-crewai>=0.22.5  # CrewAI framework for multi-agent systems
-crewai[tools]>=0.22.5  # CrewAI with additional tools
-langchain>=0.1.0  # LangChain for advanced LLM operations
-langchain-core>=0.1.0  # LangChain core components
-langchain-community>=0.0.20  # LangChain community tools
-
 # Presentation Builder dependencies
 python-pptx>=0.6.21  # For creating PowerPoint presentations
 pdfplumber>=0.10.0  # For extracting text from PDF files
 PyMuPDF>=1.23.0  # Alternative for PDF text extraction (more powerful)
+
+# LangGraph dependencies for advanced Excel agent
+langgraph>=0.0.40
+langchain-core>=0.1.0

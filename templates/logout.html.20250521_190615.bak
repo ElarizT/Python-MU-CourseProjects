@@ -1,0 +1,353 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Logging Out...</title>
+    <style>
+        body {
+            font-family: 'Inter', 'Segoe UI', Tahoma, Geneva, Verdana, sans-serif;
+            background-color: #121212;
+            color: #ffffff;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            height: 100vh;
+            margin: 0;
+            text-align: center;
+        }
+        
+        .logout-container {
+            background-color: #1e1e1e;
+            padding: 2rem;
+            border-radius: 10px;
+            box-shadow: 0 8px 20px rgba(0, 0, 0, 0.3);
+            width: 90%;
+            max-width: 400px;
+        }
+        
+        h1 {
+            margin-bottom: 1.5rem;
+            font-weight: 600;
+        }
+        
+        p {
+            margin-bottom: 1.5rem;
+            font-size: 1rem;
+            color: #aaa;
+            line-height: 1.5;
+        }
+        
+        .logout-progress {
+            width: 100%;
+            height: 6px;
+            background-color: #333;
+            border-radius: 3px;
+            overflow: hidden;
+            margin-bottom: 1.5rem;
+        }
+        
+        .logout-progress-bar {
+            height: 100%;
+            background: linear-gradient(90deg, #3a7bd5, #6ebce3);
+            width: 0%;
+            transition: width 2s ease;
+        }
+        
+        .home-link {
+            display: inline-block;
+            margin-top: 1rem;
+            padding: 0.75rem 1.5rem;
+            background-color: #3a7bd5;
+            color: white;
+            text-decoration: none;
+            border-radius: 6px;
+            font-weight: 500;
+            opacity: 0;
+            transition: opacity 0.5s ease;
+        }
+        
+        .home-link:hover {
+            background-color: #2c5fa6;
+        }
+        
+        .status {
+            font-size: 0.9rem;
+            color: #777;
+            min-height: 4em;
+        }
+    </style>
+</head>
+<body>
+    <div class="logout-container">
+        <h1>Signing Out...</h1>
+        <p>We're securely signing you out of your account and clearing all authentication data.</p>
+        
+        <div class="logout-progress">
+            <div class="logout-progress-bar" id="progress-bar"></div>
+        </div>
+        
+        <div class="status" id="status">Initializing logout process...</div>
+        
+        <a href="/" class="home-link" id="home-link">Return to Home Page</a>
+    </div>
+      <!-- Firebase App (the core Firebase SDK) -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-app-compat.js"></script>
+    <!-- Add Firebase Auth -->
+    <script src="https://www.gstatic.com/firebasejs/9.21.0/firebase-auth-compat.js"></script>
+    
+    <!-- Enhanced logout utilities -->
+    <script src="/static/js/enhanced-logout.js"></script>
+
+    <script>
+        document.addEventListener('DOMContentLoaded', function() {
+            const progressBar = document.getElementById('progress-bar');
+            const status = document.getElementById('status');
+            const homeLink = document.getElementById('home-link');
+            let logoutSteps = 0;
+            
+            // Start progress animation
+            progressBar.style.width = '10%';
+            
+            // Update status
+            function updateStatus(message, progress) {
+                status.textContent = message;
+                progressBar.style.width = progress + '%';
+                logoutSteps++;
+                
+                // Check if logout process is complete
+                if (logoutSteps >= 5) {
+                    homeLink.style.opacity = '1';
+                }
+            }
+              // Step 1: Set explicit logout flag
+            localStorage.setItem('explicitly_logged_out', 'true');
+            updateStatus('Setting logout flags...', 20);
+            
+            setTimeout(() => {
+                // Step 2: Clear Firebase auth data from localStorage and sessionStorage
+                try {
+                    // First, clear known Firebase keys
+                    const knownKeys = [
+                        'firebase:authUser',
+                        'firebase:previous-user',
+                        'firebase:remember',
+                        'firebase:forceRefresh',
+                        'firebase:redirectUser',
+                        'firebase:persistence',
+                        'firebase:pendingRedirect',
+                        'firebaseToken',
+                        'firebase:host:',
+                        'firebase.database:',
+                        'firebase-installations-database',
+                        'firebase-messaging-database',
+                        'firebaseLocalStorageDb',
+                        'firebase-heartbeat-database'
+                    ];
+                    
+                    // Get project ID if available for more targeted cleanup
+                    let projectId = null;
+                    try {
+                        const authDomain = document.querySelector('meta[name="firebase-auth-domain"]')?.content;
+                        if (authDomain) {
+                            projectId = authDomain.split('.')[0];
+                            console.log('Detected project ID for targeted cleanup:', projectId);
+                            
+                            // Add project-specific keys if we found a project ID
+                            if (projectId) {
+                                knownKeys.push(`firebase:authUser:${projectId}`);
+                                knownKeys.push(`firebase:previous-user:${projectId}`);
+                            }
+                        }
+                    } catch (projectIdError) {
+                        console.error('Error detecting project ID:', projectIdError);
+                    }
+                    
+                    // Clear all known keys
+                    knownKeys.forEach(key => {
+                        try {
+                            localStorage.removeItem(key);
+                            console.log(`Cleared localStorage key: ${key}`);
+                        } catch (e) {
+                            console.error(`Error clearing localStorage key ${key}:`, e);
+                        }
+                    });
+                    
+                    // Clear any keys related to Firebase in localStorage
+                    for (let i = localStorage.length - 1; i >= 0; i--) {
+                        const key = localStorage.key(i);
+                        if (key && (key.startsWith('firebase:') || key.includes('firebase') || key.includes('auth'))) {
+                            localStorage.removeItem(key);
+                            console.log('Cleared localStorage item:', key);
+                        }
+                    }
+                    
+                    // Clear sessionStorage as well
+                    for (let i = sessionStorage.length - 1; i >= 0; i--) {
+                        const key = sessionStorage.key(i);
+                        if (key && (key.startsWith('firebase:') || key.includes('firebase') || key.includes('auth'))) {
+                            sessionStorage.removeItem(key);
+                            console.log('Cleared sessionStorage item:', key);
+                        }
+                    }
+                    
+                    // Try to clear cookies related to Firebase auth
+                    try {
+                        const cookieNames = ['firebaseauth', 'firebase-auth', 'firebase'];
+                        cookieNames.forEach(name => {
+                            document.cookie = `${name}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+                        });
+                        
+                        // Also try to clear any cookies with firebase in the name
+                        const allCookies = document.cookie.split(';');
+                        for (let i = 0; i < allCookies.length; i++) {
+                            const cookiePart = allCookies[i].trim();
+                            const cookieName = cookiePart.split('=')[0];
+                            if (cookieName && (cookieName.toLowerCase().includes('firebase') || cookieName.toLowerCase().includes('auth'))) {
+                                document.cookie = `${cookieName}=; expires=Thu, 01 Jan 1970 00:00:00 UTC; path=/;`;
+                                console.log(`Cleared cookie: ${cookieName}`);
+                            }
+                        }
+                    } catch (e) {
+                        console.error('Error clearing cookies:', e);
+                    }
+                    
+                    updateStatus('Clearing browser storage...', 40);
+                } catch (e) {
+                    console.error('Error clearing storage:', e);
+                    updateStatus('Error clearing browser storage', 40);
+                }
+                
+                setTimeout(() => {                    // Step 3: Initialize Firebase if possible
+                    try {
+                        // Check if Firebase is already initialized
+                        if (!firebase.apps || firebase.apps.length === 0) {
+                            // Try to extract config from meta tags
+                            const apiKey = document.querySelector('meta[name="firebase-api-key"]')?.content;
+                            const authDomain = document.querySelector('meta[name="firebase-auth-domain"]')?.content;
+                            const projectId = document.querySelector('meta[name="firebase-project-id"]')?.content;
+                            
+                            if (apiKey && authDomain && projectId) {
+                                firebase.initializeApp({
+                                    apiKey: apiKey,
+                                    authDomain: authDomain,
+                                    projectId: projectId
+                                });
+                                console.log('Firebase initialized for logout');
+                            }
+                        }
+                        
+                        // Try to set persistence to NONE to prevent auto-relogin
+                        if (firebase.auth) {
+                            firebase.auth().setPersistence(firebase.auth.Auth.Persistence.NONE)
+                                .then(() => {
+                                    console.log('Set Firebase persistence to NONE');
+                                    updateStatus('Preparing to sign out from Firebase...', 60);
+                                })
+                                .catch(error => {
+                                    console.error('Error setting Firebase persistence:', error);
+                                    updateStatus('Preparing to sign out from Firebase...', 60);
+                                });
+                        } else {
+                            updateStatus('Preparing to sign out from Firebase...', 60);
+                        }
+                    } catch (e) {
+                        console.error('Error initializing Firebase:', e);
+                        updateStatus('Error initializing Firebase', 60);
+                    }
+                    
+                    setTimeout(() => {
+                        // Step 4: Sign out from Firebase
+                        try {
+                            if (firebase.auth) {
+                                firebase.auth().signOut().then(() => {
+                                    updateStatus('Successfully signed out from Firebase', 80);
+                                      // Final step: Clear IndexedDB
+                                    setTimeout(() => {
+                                        try {
+                                            // Clear IndexedDB for common Firebase auth stores
+                                            const dbNames = [
+                                                'firebaseLocalStorageDb', 
+                                                'firebase-heartbeat-database',
+                                                'firebase-installations-database',
+                                                'firebase-messaging-database',
+                                                'firebase-analytics-database',
+                                                'firebase-performance-database'
+                                            ];
+                                            
+                                            dbNames.forEach(dbName => {
+                                                const req = indexedDB.deleteDatabase(dbName);
+                                                req.onsuccess = () => console.log(`Successfully deleted IndexedDB: ${dbName}`);
+                                                req.onerror = () => console.error(`Error deleting IndexedDB: ${dbName}`);
+                                            });
+                                            
+                                            // Also try to delete any database with firebase in the name
+                                            if (indexedDB.databases) {
+                                                indexedDB.databases().then(databases => {
+                                                    databases.forEach(database => {
+                                                        if (database.name && database.name.toLowerCase().includes('firebase')) {
+                                                            const req = indexedDB.deleteDatabase(database.name);
+                                                            req.onsuccess = () => console.log(`Successfully deleted dynamic IndexedDB: ${database.name}`);
+                                                            req.onerror = () => console.error(`Error deleting dynamic IndexedDB: ${database.name}`);
+                                                        }
+                                                    });
+                                                }).catch(err => {
+                                                    console.error('Error listing IndexedDB databases:', err);
+                                                });
+                                            }
+                                            
+                                            // Attempt to delete Firebase apps if available
+                                            try {
+                                                if (firebase.apps && firebase.apps.length > 0) {
+                                                    Promise.all(firebase.apps.map(app => app.delete()))
+                                                        .then(() => console.log('Successfully deleted all Firebase apps'))
+                                                        .catch(e => console.error('Error deleting Firebase apps:', e));
+                                                }
+                                            } catch (e) {
+                                                console.error('Error deleting Firebase apps:', e);
+                                            }
+                                            
+                                            updateStatus('Logout complete! You are now signed out.', 100);
+                                            homeLink.style.opacity = '1';
+                                            
+                                            // Force refresh session state
+                                            fetch('/api/auth/session', {
+                                                headers: {
+                                                    'Cache-Control': 'no-cache, no-store, must-revalidate',
+                                                    'Pragma': 'no-cache',
+                                                    'Expires': '0'
+                                                }
+                                            });
+                                            
+                                        } catch (e) {
+                                            console.error('Error clearing IndexedDB:', e);
+                                            updateStatus('Logout complete with warnings.', 100);
+                                            homeLink.style.opacity = '1';
+                                        }
+                                    }, 500);
+                                }).catch(error => {
+                                    console.error('Error signing out from Firebase:', error);
+                                    updateStatus('Error signing out, but logout process completed', 100);
+                                    homeLink.style.opacity = '1';
+                                });
+                            } else {
+                                updateStatus('Firebase auth not available, skipping signout', 80);
+                                
+                                setTimeout(() => {
+                                    updateStatus('Logout complete!', 100);
+                                    homeLink.style.opacity = '1';
+                                }, 500);
+                            }
+                        } catch (e) {
+                            console.error('Error during Firebase signout:', e);
+                            updateStatus('Encountered errors, but logout completed', 100);
+                            homeLink.style.opacity = '1';
+                        }
+                    }, 500);
+                }, 500);
+            }, 500);
+        });
+    </script>
+</body>
+</html>

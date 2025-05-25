@@ -1,0 +1,350 @@
+{% extends 'base.html' %}
+
+{% block title %}{{ presentation_title }} - LightYearAI{% endblock %}
+
+{% block head %}
+<link rel="stylesheet" href="{{ url_for('static', filename='css/presentation_view.css') }}?v={{ range(1, 10000) | random }}">
+<link rel="stylesheet" href="https://cdnjs.cloudflare.com/ajax/libs/font-awesome/5.15.4/css/all.min.css">
+{% endblock %}
+
+{% block content %}
+<div class="presentation-container" id="presentation">
+    <!-- Theme Selector -->
+    <div class="theme-selector">
+        <button id="theme-toggle" class="theme-toggle-btn">
+            <i class="fas fa-palette"></i>
+        </button>
+        <div class="theme-options">
+            {% for theme in theme_options %}
+            <button class="theme-option" data-theme="{{ theme }}">{{ theme }}</button>
+            {% endfor %}
+        </div>
+    </div>
+
+    <!-- Progress Bar -->
+    <div class="progress-bar-container">
+        <div class="progress-bar" id="progress-bar"></div>
+    </div>
+
+    <!-- Title Slide -->
+    <div class="slide active" id="slide-0" data-layout="title">
+        <div class="slide-content">
+            <h1 class="slide-title">{{ presentation_title }}</h1>
+            <div class="slide-subtitle">Created with LightYearAI</div>
+            <div class="slide-navigation-hint">
+                <div class="hint-text">Press <span class="key-hint">→</span> or swipe left to continue</div>
+                <div class="arrow-hint"><i class="fas fa-arrow-right"></i></div>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Content Slides -->
+    {% for slide in slides %}
+    <div class="slide" id="slide-{{ loop.index }}" data-layout="{{ slide.layout }}">
+        <div class="slide-content">
+            <h1 class="slide-title">{{ slide.title }}</h1>
+            
+            {% if slide.layout == "image-right" or slide.layout == "image-left" %}
+            <div class="slide-two-columns {% if slide.layout == 'image-right' %}image-right{% else %}image-left{% endif %}">
+                <div class="content-column">
+                    <ul class="bullet-points">
+                        {% for point in slide.points %}
+                        <li class="{% if point.is_bullet %}bullet{% else %}text-point{% endif %}" data-level="{{ point.level }}">
+                            {{ point.text }}
+                        </li>
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="image-column">
+                    {% for image in slide.images %}
+                    <div class="slide-image-container">
+                        <img src="{{ image.src }}" alt="{{ image.alt }}" class="slide-image">
+                    </div>
+                    {% endfor %}
+                </div>
+            </div>
+            
+            {% elif slide.layout == "two-column" %}
+            <div class="slide-two-columns">
+                <div class="content-column">
+                    <ul class="bullet-points">
+                        {% for point in slide.points %}
+                        {% if loop.index <= (slide.points|length / 2)|round(0, 'ceil') %}
+                        <li class="{% if point.is_bullet %}bullet{% else %}text-point{% endif %}" data-level="{{ point.level }}">
+                            {{ point.text }}
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+                <div class="content-column">
+                    <ul class="bullet-points">
+                        {% for point in slide.points %}
+                        {% if loop.index > (slide.points|length / 2)|round(0, 'ceil') %}
+                        <li class="{% if point.is_bullet %}bullet{% else %}text-point{% endif %}" data-level="{{ point.level }}">
+                            {{ point.text }}
+                        </li>
+                        {% endif %}
+                        {% endfor %}
+                    </ul>
+                </div>
+            </div>
+            
+            {% else %}
+            <div class="content-full">
+                <ul class="bullet-points">
+                    {% for point in slide.points %}
+                    <li class="{% if point.is_bullet %}bullet{% else %}text-point{% endif %}" data-level="{{ point.level }}">
+                        {{ point.text }}
+                    </li>
+                    {% endfor %}
+                </ul>
+                {% if slide.images|length > 0 %}
+                <div class="image-gallery">
+                    {% for image in slide.images %}
+                    <div class="slide-image-container">
+                        <img src="{{ image.src }}" alt="{{ image.alt }}" class="slide-image">
+                    </div>
+                    {% endfor %}
+                </div>
+                {% endif %}
+            </div>
+            {% endif %}
+        </div>
+    </div>
+    {% endfor %}
+    
+    <!-- Thank You Slide -->
+    <div class="slide" id="slide-{{ slides|length + 1 }}" data-layout="title">
+        <div class="slide-content">
+            <h1 class="slide-title">Thank You!</h1>
+            <div class="slide-subtitle">Presentation created by LightYearAI</div>
+            <div class="qr-placeholder">
+                <i class="fas fa-qrcode"></i>
+                <p>Scan to visit LightYearAI</p>
+            </div>
+        </div>
+    </div>
+    
+    <!-- Navigation Controls -->
+    <div class="nav-controls">
+        <button class="nav-btn" id="prev-slide" title="Previous slide">
+            <i class="fas fa-chevron-left"></i>
+        </button>
+        <button class="nav-btn" id="next-slide" title="Next slide">
+            <i class="fas fa-chevron-right"></i>
+        </button>
+    </div>
+    
+    <!-- Slide Counter -->
+    <div class="slide-indicator">
+        <span id="current-slide">1</span> / <span id="total-slides">{{ slides|length + 2 }}</span>
+    </div>
+
+    <!-- Fullscreen Button -->
+    <div class="fullscreen-control">
+        <button id="fullscreen-toggle" title="Toggle fullscreen">
+            <i class="fas fa-expand"></i>
+        </button>
+    </div>
+</div>
+{% endblock %}
+
+{% block scripts %}
+<script>
+    document.addEventListener('DOMContentLoaded', function() {
+        const presentationContainer = document.getElementById('presentation');
+        const slides = document.querySelectorAll('.slide');
+        const totalSlides = slides.length;
+        const prevBtn = document.getElementById('prev-slide');
+        const nextBtn = document.getElementById('next-slide');
+        const currentSlideIndicator = document.getElementById('current-slide');
+        const totalSlidesIndicator = document.getElementById('total-slides');
+        const progressBar = document.getElementById('progress-bar');
+        const fullscreenToggle = document.getElementById('fullscreen-toggle');
+        const themeToggle = document.getElementById('theme-toggle');
+        const themeOptions = document.querySelector('.theme-options');
+        const themeButtons = document.querySelectorAll('.theme-option');
+        
+        let currentSlideIndex = 0;
+        let isFullscreen = false;
+        
+        // Initialize slide indicators
+        totalSlidesIndicator.textContent = totalSlides;
+        currentSlideIndicator.textContent = currentSlideIndex + 1;
+        
+        // Update progress bar
+        function updateProgressBar() {
+            const progress = ((currentSlideIndex + 1) / totalSlides) * 100;
+            progressBar.style.width = `${progress}%`;
+        }
+        
+        // Function to show a specific slide
+        function showSlide(index) {
+            // Bounds check
+            if (index < 0) index = 0;
+            if (index >= totalSlides) index = totalSlides - 1;
+            
+            // Update current index
+            const previousIndex = currentSlideIndex;
+            currentSlideIndex = index;
+            
+            // Update slide indicator
+            currentSlideIndicator.textContent = currentSlideIndex + 1;
+            
+            // Update progress bar
+            updateProgressBar();
+            
+            // Determine transition direction
+            const direction = index > previousIndex ? 'next' : 'prev';
+            
+            // Hide all slides except current and target
+            slides.forEach((slide, i) => {
+                // Remove all transition classes
+                slide.classList.remove('active', 'prev', 'next', 'slide-out-left', 'slide-out-right', 'slide-in-left', 'slide-in-right');
+                
+                // Add appropriate transition class based on direction
+                if (i === previousIndex && direction === 'next') {
+                    slide.classList.add('slide-out-left');
+                } else if (i === previousIndex && direction === 'prev') {
+                    slide.classList.add('slide-out-right');
+                } else if (i === currentSlideIndex && direction === 'next') {
+                    slide.classList.add('slide-in-right', 'active');
+                } else if (i === currentSlideIndex && direction === 'prev') {
+                    slide.classList.add('slide-in-left', 'active');
+                }
+            });
+            
+            // Animate bullet points for the current slide
+            const currentBullets = slides[currentSlideIndex].querySelectorAll('.bullet-points li');
+            currentBullets.forEach((bullet, i) => {
+                bullet.style.animationDelay = `${i * 0.15}s`;
+                bullet.classList.add('animate-in');
+            });
+        }
+        
+        // Event listeners for navigation buttons
+        prevBtn.addEventListener('click', () => {
+            showSlide(currentSlideIndex - 1);
+        });
+        
+        nextBtn.addEventListener('click', () => {
+            showSlide(currentSlideIndex + 1);
+        });
+        
+        // Keyboard navigation
+        document.addEventListener('keydown', (e) => {
+            if (e.key === 'ArrowRight' || e.key === ' ') {
+                showSlide(currentSlideIndex + 1);
+            } else if (e.key === 'ArrowLeft') {
+                showSlide(currentSlideIndex - 1);
+            } else if (e.key === 'f' || e.key === 'F') {
+                toggleFullscreen();
+            }
+        });
+        
+        // Swipe navigation for touch devices
+        let touchStartX = 0;
+        let touchEndX = 0;
+        
+        document.addEventListener('touchstart', (e) => {
+            touchStartX = e.changedTouches[0].screenX;
+        });
+        
+        document.addEventListener('touchend', (e) => {
+            touchEndX = e.changedTouches[0].screenX;
+            handleSwipe();
+        });
+        
+        function handleSwipe() {
+            const threshold = 50;
+            if (touchEndX < touchStartX - threshold) {
+                // Swipe left, go to next slide
+                showSlide(currentSlideIndex + 1);
+            } else if (touchEndX > touchStartX + threshold) {
+                // Swipe right, go to previous slide
+                showSlide(currentSlideIndex - 1);
+            }
+        }
+        
+        // Fullscreen functionality
+        fullscreenToggle.addEventListener('click', toggleFullscreen);
+        
+        function toggleFullscreen() {
+            if (!isFullscreen) {
+                if (presentationContainer.requestFullscreen) {
+                    presentationContainer.requestFullscreen();
+                } else if (presentationContainer.mozRequestFullScreen) {
+                    presentationContainer.mozRequestFullScreen();
+                } else if (presentationContainer.webkitRequestFullscreen) {
+                    presentationContainer.webkitRequestFullscreen();
+                } else if (presentationContainer.msRequestFullscreen) {
+                    presentationContainer.msRequestFullscreen();
+                }
+                fullscreenToggle.innerHTML = '<i class="fas fa-compress"></i>';
+            } else {
+                if (document.exitFullscreen) {
+                    document.exitFullscreen();
+                } else if (document.mozCancelFullScreen) {
+                    document.mozCancelFullScreen();
+                } else if (document.webkitExitFullscreen) {
+                    document.webkitExitFullscreen();
+                } else if (document.msExitFullscreen) {
+                    document.msExitFullscreen();
+                }
+                fullscreenToggle.innerHTML = '<i class="fas fa-expand"></i>';
+            }
+            isFullscreen = !isFullscreen;
+        }
+        
+        // Theme selector
+        themeToggle.addEventListener('click', function() {
+            themeOptions.classList.toggle('show');
+        });
+        
+        themeButtons.forEach(button => {
+            button.addEventListener('click', function() {
+                const theme = this.dataset.theme;
+                presentationContainer.className = 'presentation-container';
+                presentationContainer.classList.add(`theme-${theme}`);
+                themeOptions.classList.remove('show');
+                
+                // Save preference to localStorage
+                localStorage.setItem('preferred-theme', theme);
+            });
+        });
+        
+        // Load saved theme preference
+        const savedTheme = localStorage.getItem('preferred-theme') || 'modern';
+        presentationContainer.classList.add(`theme-${savedTheme}`);
+        
+        // Initialize the first slide
+        showSlide(0);
+        updateProgressBar();
+        
+        // Handle fullscreen change events
+        document.addEventListener('fullscreenchange', handleFullscreenChange);
+        document.addEventListener('webkitfullscreenchange', handleFullscreenChange);
+        document.addEventListener('mozfullscreenchange', handleFullscreenChange);
+        document.addEventListener('MSFullscreenChange', handleFullscreenChange);
+        
+        function handleFullscreenChange() {
+            isFullscreen = !!(document.fullscreenElement || document.webkitFullscreenElement || 
+                            document.mozFullScreenElement || document.msFullscreenElement);
+            
+            if (isFullscreen) {
+                fullscreenToggle.innerHTML = '<i class="fas fa-compress"></i>';
+            } else {
+                fullscreenToggle.innerHTML = '<i class="fas fa-expand"></i>';
+            }
+        }
+        
+        // Click outside to close theme selector
+        document.addEventListener('click', function(event) {
+            if (!themeToggle.contains(event.target) && !themeOptions.contains(event.target)) {
+                themeOptions.classList.remove('show');
+            }
+        });
+    });
+</script>
+{% endblock %}

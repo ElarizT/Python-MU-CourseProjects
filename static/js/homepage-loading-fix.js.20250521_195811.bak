@@ -1,0 +1,102 @@
+/**
+ * Homepage Instant Loading Fix
+ * 
+ * This script runs immediately at the top of the page to ensure
+ * loading screens are hidden for the homepage.
+ * It also creates a CSS rule to ensure the loading overlay is never displayed on the homepage.
+ */
+(function() {
+    'use strict';
+    
+    // Check if we're on the homepage
+    if (window.location.pathname === '/' || window.location.pathname === '') {
+        console.log('Homepage detected in homepage-loading-fix.js, applying instant fix');
+        
+        // Insert CSS to always hide loading overlay on homepage
+        var style = document.createElement('style');
+        style.type = 'text/css';
+        style.innerHTML = '#global-loading-overlay { display: none !important; opacity: 0 !important; }';
+        
+        // Insert the style element into the head
+        if (document.head) {
+            document.head.appendChild(style);
+        } else {
+            // If head isn't available yet, wait for it
+            var checkHead = setInterval(function() {
+                if (document.head) {
+                    document.head.appendChild(style);
+                    clearInterval(checkHead);
+                }
+            }, 10);
+        }
+        
+        // Add event listeners for when DOM elements might become available
+        function hideAnyLoadingOverlay() {
+}            // Direct approach to hiding overlay
+            var elements = document.querySelectorAll('div[id="global-loading-overlay"]');
+            if (elements && elements.length > 0) {
+                for (var i = 0; i < elements.length; i++) {
+                    elements[i].style.cssText = 'display: none !important; opacity: 0 !important; visibility: hidden !important;';
+                    elements[i].classList.add('loading-disabled-homepage');
+                }
+                console.log('Successfully hidden loading overlay elements:', elements.length);
+            }
+            
+            // Try to use LoadingManager API if available
+            if (window.LoadingManager && typeof window.LoadingManager.hideLoading === 'function') {
+                window.LoadingManager.hideLoading();
+            }
+            
+            // If the LoadingManager exists but hideLoading doesn't work, override it
+            if (window.LoadingManager && (!window.LoadingManager._homepageOverridden)) {
+                window.LoadingManager._homepageOverridden = true;
+                var originalShowLoading = window.LoadingManager.showLoading;
+                
+                // Override showLoading to prevent it from showing on homepage
+                window.LoadingManager.showLoading = function(message) {
+                    if (window.location.pathname === '/' || window.location.pathname === '') {
+                        console.log('Prevented loading screen on homepage');
+                        return;
+                    }
+                    // Call original for non-homepage
+                    return originalShowLoading.call(window.LoadingManager, message);
+                };
+                
+                console.log('Successfully overrode LoadingManager.showLoading to prevent on homepage');
+            }
+        }
+        
+        // Run immediately
+        hideAnyLoadingOverlay();
+        
+        // Set up a MutationObserver to detect when the overlay might be added
+        if (typeof MutationObserver !== 'undefined') {
+            var observer = new MutationObserver(function(mutations) {
+                hideAnyLoadingOverlay();
+            });
+            
+            // Start observing the document for changes
+            if (document.documentElement) {
+                observer.observe(document.documentElement, { childList: true, subtree: true });
+            }
+        }
+        
+        // Also set up interval checks to be extra safe
+        var intervalId = setInterval(hideAnyLoadingOverlay, 50); // More frequent checks
+        
+        // Clear interval after 10 seconds to avoid unnecessary processing
+        setTimeout(function() {
+            clearInterval(intervalId);
+        }, 10000);
+        
+        // Also add the usual event listeners
+        document.addEventListener('DOMContentLoaded', hideAnyLoadingOverlay);
+        window.addEventListener('load', hideAnyLoadingOverlay);
+        
+        // Final check to override any attempts to show loading
+        setTimeout(function() {
+            hideAnyLoadingOverlay();
+            console.log('Final homepage loading check complete');
+        }, 2000);
+    }
+})();
